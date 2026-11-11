@@ -10,10 +10,10 @@ import { clock, esc } from "./util.js";
 
 const BADGES_SHOWN = 3;
 
-/** Who meets the line where. */
-export function diagramModel(line, stops, net) {
-  const meet = stops.map(s => [...net.linesNear([s.lon, s.lat])].filter(o => o !== line).sort(compareLines));
-  const along = stops.slice(0, -1).map((s, i) => net.linesAlong(s.key, stops[i + 1].key, line.cls).filter(o => o !== line).sort(compareLines));
+/** Who meets the line where (asked of the network worker). */
+export async function diagramModel(line, stops, net) {
+  const { meet, along } = await net.diagram(line, stops);
+  meet.forEach(m => m.sort(compareLines)); along.forEach(a => a.sort(compareLines));
   const crossing = stops.map((s, i) => {
     const near = new Set([...(along[i - 1] || []), ...(along[i] || [])]);
     return meet[i].filter(o => !near.has(o));
@@ -57,7 +57,7 @@ export function drawDiagram(line, stops, model) {
   // The followed line, thickest; the part already travelled is faded.
   const pastIdx = stops.findIndex(s => !s.past);
   g += `<line x1="${X}" y1="${ys[0]}" x2="${X}" y2="${ys[ys.length - 1]}" stroke="${c}" stroke-width="${TW}" stroke-linecap="round"/>`;
-  if (pastIdx > 0) g += `<line x1="${X}" y1="${ys[0]}" x2="${X}" y2="${ys[pastIdx]}" stroke="var(--surface)" stroke-width="${TW + 1}" opacity=".55"/>`;
+  if (pastIdx > 0) g += `<line x1="${X}" y1="${ys[0]}" x2="${X}" y2="${ys[pastIdx]}" stroke="var(--paper)" stroke-width="${TW + 1}" opacity=".55"/>`;
   for (let i = 0; i + 1 < ys.length; i++) {
     const m = (ys[i] + ys[i + 1]) / 2;
     g += `<path d="M${X - 2.6} ${m - 1.8} L${X} ${m + 1.4} L${X + 2.6} ${m - 1.8}" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -72,9 +72,9 @@ export function drawDiagram(line, stops, model) {
     });
     if (n) {
       const w = 19 + Math.min(n, 8) * 1.4, h = Math.max(12.5, 8 + Math.min(r, 8) * step);
-      g += `<rect x="${X - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${Math.min(h, w) / 2}" fill="var(--stop-fill)" stroke="var(--stop-ring)" stroke-width="1.9"/>`;
+      g += `<rect x="${X - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${Math.min(h, w) / 2}" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.9"/>`;
     } else {
-      g += `<circle cx="${X}" cy="${y}" r="${i === 0 || i === stops.length - 1 ? 6.6 : 5.4}" fill="var(--stop-fill)" stroke="var(--stop-ring)" stroke-width="1.9"/>`;
+      g += `<circle cx="${X}" cy="${y}" r="${i === 0 || i === stops.length - 1 ? 6.6 : 5.4}" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.9"/>`;
     }
   });
   svg.innerHTML = g;

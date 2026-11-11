@@ -21,7 +21,8 @@ python3 -m http.server 8000   # then open http://localhost:8000
 | `index.html` | The page: map, search bar, panel/sheet, icons (Phosphor, inline) |
 | `css/app.css` | All styling. Colour tokens at the top (light, and `[data-theme="dark"]`) |
 | `js/app.js` | The interface: screens, sheet, search, departures, directions, settings |
-| `js/network.js` | The transit network on the map: loads lines per tile, glues shared stretches side by side |
+| `js/network.js` | The transit network on the map (main thread): which tiles to load, map layers, stop markers |
+| `js/net-worker.js` | The heavy part, in a Web Worker: downloads lines, lays every shape onto a shared corridor graph, glues lines side by side, groups stops with the same name into stations |
 | `js/diagram.js` | The line diagram (track, shared strands, connecting ticks, capsules) |
 | `js/lines.js` | Modes, line colours (palette for lines without one), badges |
 | `js/basemap.js` | The base map style (OpenStreetMap via OpenFreeMap), light and dark |
@@ -35,4 +36,4 @@ map, the loaded network and the current screens.
 
 - Timetables, live times, routing and line shapes: [Transitous](https://transitous.org) (community-run, free; please use it fairly).
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org) © OpenMapTiles.
-- Font: Google Sans Flex (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
+- Fonts: Overpass and Overpass Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).

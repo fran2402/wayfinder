@@ -1,76 +1,90 @@
-// The public transport network on the map: every line in view, drawn the way a metro map does —
-// lines sharing a street or track glued side by side, a white station at every stop.
-//
-// Data comes from Transitous' "routes" endpoint per map tile. It returns stop-to-stop shapes;
-// shapes between the same two stations (and of the same kind: rail, street, …) are one bundle.
+// The transit network on the map — the main-thread half. It decides which tiles to ask for and
+// hands the finished map data to MapLibre; the heavy work happens in net-worker.js.
 
-import { api, shape } from "./api.js";
-import { ensureLine, colourOf, WIDTH, GROUP, CLASS_ORDER, compareLines, classOf } from "./lines.js";
-import { debounce, metres } from "./util.js";
+import { ensureLine, registry } from "./lines.js";
+import { debounce } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 
-/** Far out, only the big networks: buses appear from zoom 11, trams from 9, trains always. */
-export const DRAW_FROM = { train: 0, metro: 8, tram: 9, ferry: 8, other: 11, bus: 11 };
-
 /** Line width in pixels for a relative width w, by zoom. */
 const scaled = (prop, add = 0, mul = 1) => ["interpolate", ["exponential", 1.35], ["zoom"],
-  ...[[5, 0.9], [9, 1.5], [12, 2.5], [14, 3.7], [16, 5.4], [19, 9]].flatMap(([z, k]) => [z, ["+", ["*", ["get", prop], k * mul], add]])];
+  ...[[5, 0.9], [9, 1.5], [12, 2.5], [14, 3.6], [16, 5.2], [19, 8.5]].flatMap(([z, k]) => [z, ["+", ["*", ["get", prop], k * mul], add]])];
+const wide = (a, b, c, d) => ["interpolate", ["linear"], ["zoom"], 8, a, 12, b, 15, c, 18, d];
 
 export function networkSources() {
-  return { network: { type: "geojson", data: EMPTY, tolerance: 0.3 }, stations: { type: "geojson", data: EMPTY },
-    focus: { type: "geojson", data: EMPTY, lineMetrics: false }, trip: { type: "geojson", data: EMPTY } };
+  return { network: { type: "geojson", data: EMPTY, tolerance: 0.45, buffer: 64 }, stations: { type: "geojson", data: EMPTY, buffer: 32 },
+    focus: { type: "geojson", data: EMPTY }, trip: { type: "geojson", data: EMPTY } };
 }
 
-/** Layers go in three slots of the base style: lines under labels, stations, and labels on top. */
+/** Layers for three slots in the base style: lines under the labels, stations, labels on top. */
 export function networkLayers(t) {
   const lines = [
     { id: "net-casing", type: "line", source: "network", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["get", "s"] },
-      paint: { "line-color": t.land, "line-width": scaled("w", 2.2), "line-offset": scaled("off") } },
+      paint: { "line-color": t.casing, "line-width": scaled("w", 2.4), "line-offset": scaled("off") } },
     { id: "net-lines", type: "line", source: "network", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["get", "s"] },
-      paint: { "line-color": ["get", "c"], "line-width": scaled("w", 0.35), "line-offset": scaled("off") } },
+      paint: { "line-color": ["get", "c"], "line-width": scaled("w", 0.4), "line-offset": scaled("off") } },
     { id: "net-rail-dash", type: "line", source: "network", filter: ["==", ["get", "dash"], 1], minzoom: 9,
-      paint: { "line-color": t.land, "line-width": scaled("w", 0, 0.32), "line-offset": scaled("off"), "line-dasharray": [0.5, 1.2], "line-opacity": 0.0001 } },
-    { id: "net-hit", type: "line", source: "network", paint: { "line-color": "#000", "line-opacity": 0, "line-width": 16, "line-offset": scaled("off") } },
-    // A followed line or a planned trip, drawn over the network.
-    { id: "focus-casing", type: "line", source: "focus", layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": t.land, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 6, 14, 12, 18, 20] } },
-    { id: "focus-line", type: "line", source: "focus", layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": ["get", "c"], "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 14, 8, 18, 15] } },
-    { id: "trip-casing", type: "line", source: "trip", filter: ["==", ["get", "k"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": t.land, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 6, 14, 12, 18, 20] } },
-    { id: "trip-ride", type: "line", source: "trip", filter: ["==", ["get", "k"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": ["get", "c"], "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 14, 8, 18, 15] } },
+      paint: { "line-color": t.casing, "line-width": scaled("w", 0, 0.3), "line-offset": scaled("off"), "line-dasharray": [0.6, 1.4] } },
+    { id: "focus-casing", type: "line", source: "focus", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": t.casing, "line-width": wide(6, 9, 13, 20) } },
+    { id: "focus-line", type: "line", source: "focus", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": ["get", "c"], "line-width": wide(3.5, 5.5, 8.5, 15) } },
+    { id: "trip-casing", type: "line", source: "trip", filter: ["==", ["get", "k"], "ride"], layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": t.casing, "line-width": wide(6, 9, 13, 20) } },
+    { id: "trip-ride", type: "line", source: "trip", filter: ["==", ["get", "k"], "ride"], layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": ["get", "c"], "line-width": wide(3.5, 5.5, 8.5, 15) } },
     { id: "trip-walk", type: "line", source: "trip", filter: ["==", ["get", "k"], "walk"], layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": t.walk, "line-width": ["interpolate", ["linear"], ["zoom"], 10, 3, 16, 5.5], "line-dasharray": [0.1, 1.8] } },
+      paint: { "line-color": t.walk, "line-width": wide(2.5, 3, 4.5, 6), "line-dasharray": [0.1, 1.9] } },
     { id: "trip-bike", type: "line", source: "trip", filter: ["==", ["get", "k"], "bike"], layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": "#1E9B55", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 4, 16, 7] } },
+      paint: { "line-color": t.bike, "line-width": wide(3, 4, 5.5, 8) } },
   ];
+  const showStation = ["any", [">=", ["zoom"], 14], ["all", [">=", ["zoom"], 9], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 12], [">=", ["get", "n"], 3]]];
   const stations = [
-    { id: "stations", type: "circle", source: "stations",
-      filter: ["any", [">=", ["zoom"], 13.5], ["all", [">=", ["zoom"], 9], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 11.5], [">=", ["get", "n"], 3]]],
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, ["+", 2, ["*", ["min", ["get", "n"], 6], 0.25]], 14, ["+", 3.6, ["*", ["min", ["get", "n"], 8], 0.6]], 18, ["+", 6, ["*", ["min", ["get", "n"], 8], 0.9]]],
-        "circle-color": t.stopFill, "circle-stroke-color": t.stopRing,
-        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 9, 1.2, 15, 2.2], "circle-opacity": ["get", "o"], "circle-stroke-opacity": ["get", "o"],
-      } },
+    // Walking links between stops of one station: a white bar with an outline, as on metro maps.
+    { id: "station-links-casing", type: "line", source: "stations", filter: ["all", ["==", ["get", "link"], 1], [">=", ["zoom"], 14]], layout: { "line-cap": "round" },
+      paint: { "line-color": t.ring, "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 17, 11] } },
+    { id: "station-links", type: "line", source: "stations", filter: ["all", ["==", ["get", "link"], 1], [">=", ["zoom"], 14]], layout: { "line-cap": "round" },
+      paint: { "line-color": t.stopFill, "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.4, 17, 6.5] } },
+    { id: "stations", type: "symbol", source: "stations", filter: ["all", ["!=", ["get", "link"], 1], showStation],
+      layout: { "icon-image": ["concat", "stop-", ["get", "kind"]], "icon-allow-overlap": true, "icon-ignore-placement": true,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 9, ["*", 0.5, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.05]]], 13, ["*", 0.72, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.06]]],
+          16, ["*", 1, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.07]]], 19, ["*", 1.35, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.07]]]],
+        "symbol-sort-key": ["get", "n"] } },
     { id: "trip-stops", type: "circle", source: "trip", filter: ["==", ["get", "k"], "stop"],
       paint: { "circle-radius": ["case", ["==", ["get", "end"], 1], 6.5, 3.2], "circle-color": t.stopFill,
-        "circle-stroke-color": ["case", ["==", ["get", "end"], 1], t.stopRing, ["get", "c"]], "circle-stroke-width": ["case", ["==", ["get", "end"], 1], 2.4, 1.6] } },
+        "circle-stroke-color": ["case", ["==", ["get", "end"], 1], t.ring, ["get", "c"]], "circle-stroke-width": ["case", ["==", ["get", "end"], 1], 2.6, 1.6] } },
   ];
   const labels = [
     { id: "station-labels", type: "symbol", source: "stations",
-      filter: ["any", [">=", ["zoom"], 15], ["all", [">=", ["zoom"], 11], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 13], [">=", ["get", "n"], 4]]],
-      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 11, 10.5, 16, 13],
-        "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 0.9, "text-justify": "auto", "text-max-width": 9,
+      filter: ["all", ["==", ["get", "lbl"], 1], ["any", [">=", ["zoom"], 15], ["all", [">=", ["zoom"], 11], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 13], [">=", ["get", "n"], 4]]]],
+      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 11, 10.5, 16, 13.5],
+        "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 1, "text-justify": "auto", "text-max-width": 9,
         "symbol-sort-key": ["-", 0, ["get", "n"]] },
-      paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.6, "text-opacity": ["get", "o"] } },
+      paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.7 } },
     { id: "trip-labels", type: "symbol", source: "trip", filter: ["all", ["==", ["get", "k"], "stop"], ["==", ["get", "end"], 1]],
-      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": 12.5, "text-variable-anchor": ["left", "right", "top", "bottom"],
-        "text-radial-offset": 1, "text-allow-overlap": false },
+      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": 12.5, "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 1 },
       paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.8 } },
   ];
   return { lines, stations, labels };
+}
+
+/** Stop markers, drawn on demand: the shape tells the mode. */
+export function stopIcon(map, id, t) {
+  const kind = id.replace("stop-", ""), px = 2, S = 32, c = document.createElement("canvas");
+  c.width = c.height = S * px;
+  const g = c.getContext("2d");
+  g.scale(px, px);
+  g.fillStyle = t.stopFill; g.strokeStyle = t.ring; g.lineJoin = "round";
+  const m = S / 2;
+  if (kind === "train" || kind === "metro") {
+    g.lineWidth = 3.6; g.beginPath(); g.arc(m, m, 8.6, 0, Math.PI * 2); g.fill(); g.stroke();
+    if (kind === "train") { g.fillStyle = t.ring; g.beginPath(); g.arc(m, m, 3, 0, Math.PI * 2); g.fill(); }
+  } else if (kind === "tram") {
+    g.lineWidth = 3; g.beginPath(); g.arc(m, m, 6.6, 0, Math.PI * 2); g.fill(); g.stroke();
+  } else if (kind === "bus") {
+    g.lineWidth = 2.6; const s = 11; g.beginPath(); g.roundRect(m - s / 2, m - s / 2, s, s, 2.5); g.fill(); g.stroke();
+  } else if (kind === "ferry") {
+    g.lineWidth = 2.6; g.beginPath(); g.moveTo(m, m - 8); g.lineTo(m + 8, m); g.lineTo(m, m + 8); g.lineTo(m - 8, m); g.closePath(); g.fill(); g.stroke();
+  } else {
+    g.lineWidth = 2.6; g.beginPath(); g.moveTo(m, m - 7.5); g.lineTo(m + 7.5, m + 6); g.lineTo(m - 7.5, m + 6); g.closePath(); g.fill(); g.stroke();
+  }
+  map.addImage(id, { width: c.width, height: c.height, data: g.getImageData(0, 0, c.width, c.height).data }, { pixelRatio: px });
 }
 
 const tileBox = (x, y, z) => {
@@ -85,190 +99,142 @@ const tileOf = (lon, lat, z) => {
 export class Network {
   constructor(map) {
     this.map = map;
-    this.segs = new Map();      // bundle key → { coords, lines:Set }
-    this.stations = new Map();  // station key → { key, name, lon, lat, lines:Set }
-    this.tiles = new Map();     // "zoom/z/x/y" → "queued" | "loading" | "done" | "failed"
+    this.worker = new Worker(new URL("./net-worker.js", import.meta.url), { type: "module" });
+    this.tiles = new Map();   // key → queued | loading | done | failed | split
     this.queue = [];
     this.active = 0;
     this.enabled = new Set(["train", "metro", "tram", "bus", "ferry", "other"]);
     this.spread = true;
     this.focusKey = null;
     this.dimmed = false;
+    this.seen = new Set();
     this.listeners = new Set();
-    this.renderSoon = debounce(() => this.render(), 90);
-    this.lastBucket = null;
-    this.loading = 0;
-    this.seen = new Set();      // kinds of transport met so far
+    this.asks = new Map(); this.askId = 0;
+    this.byId = new Map();    // the worker's short line ids → line keys
+    this.urls = [];
+    this.lastSent = "";
+    this.renderSoon = debounce(force => this.render(force), 350);
+    this.worker.onmessage = ({ data: m }) => this.onWorker(m);
+    this.worker.onerror = e => console.error("Network worker:", e.message);
   }
   on(fn) { this.listeners.add(fn); }
   emit() { for (const fn of this.listeners) fn(); }
+  get loading() { return this.active + this.queue.length; }
 
-  /** The server filters by zoom up to 10 (trains only far out); from 11 on the answer is the same. */
   bucket() { return Math.max(6, Math.min(11, Math.floor(this.map.getZoom()))); }
 
-  /** Ask for the tiles that cover the view (and a margin around it). */
+  /** Ask for the tiles that cover the view (with a margin); drop the ones no longer wanted. */
   update() {
     const zq = this.bucket(), g = Math.max(4, zq - 1);
-    const b = this.map.getBounds(), padX = (b.getEast() - b.getWest()) * 0.15, padY = (b.getNorth() - b.getSouth()) * 0.15;
+    const b = this.map.getBounds(), padX = (b.getEast() - b.getWest()) * 0.12, padY = (b.getNorth() - b.getSouth()) * 0.12;
     const [x0, y0] = tileOf(Math.max(-180, b.getWest() - padX), Math.min(85, b.getNorth() + padY), g);
     const [x1, y1] = tileOf(Math.min(179.999, b.getEast() + padX), Math.max(-85, b.getSouth() - padY), g);
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, want = [];
     for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
-      const key = `${zq}/${g}/${x}/${y}`;
-      const st = this.tiles.get(key);
-      if (!st || st === "failed") want.push({ key, zq, x, y, g, depth: 0, box: tileBox(x, y, g), d: Math.hypot(x - cx, y - cy) });
+      const key = `${zq}/${g}/${x}/${y}`, st = this.tiles.get(key);
+      if (!st || st === "failed" || st === "cancelled") want.push({ key, zq, x, y, g, depth: 0, box: tileBox(x, y, g), d: Math.hypot(x - cx, y - cy) });
     }
     want.sort((a, b) => a.d - b.d);
-    // Tiles queued for another zoom are no longer wanted.
     this.queue = this.queue.filter(q => { if (q.zq === zq) return true; this.tiles.delete(q.key); return false; });
     for (const w of want) { this.tiles.set(w.key, "queued"); this.queue.push(w); }
     this.pump();
-    const rz = Math.floor(this.map.getZoom());
-    if (this.lastBucket !== zq || this.lastDrawZoom !== rz) { this.lastBucket = zq; this.lastDrawZoom = rz; this.render(); }
-  }
-
-  pump() {
-    while (this.active < 4 && this.queue.length) {
-      const t = this.queue.shift();
-      this.active++; this.loading++; this.tiles.set(t.key, "loading"); this.emit();
-      api.routes(t.zq, t.box)
-        .then(d => { this.ingest(d, t.zq); this.tiles.set(t.key, "done"); this.renderSoon(); })
-        .catch(e => {
-          // Too dense for one request: ask for its four quarters instead.
-          if (/too many/i.test(e.message) && t.depth < 3) {
-            this.tiles.set(t.key, "split");
-            for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-              const x = t.x * 2 + dx, y = t.y * 2 + dy, g = t.g + 1, key = `${t.zq}/${g}/${x}/${y}`;
-              this.tiles.set(key, "queued");
-              this.queue.unshift({ key, zq: t.zq, x, y, g, depth: t.depth + 1, box: tileBox(x, y, g) });
-            }
-          } else this.tiles.set(t.key, "failed");
-        })
-        .finally(() => { this.active--; this.loading--; this.emit(); this.pump(); });
-    }
-  }
-
-  station(s) {
-    const key = s.parentId || s.stopId;
-    let st = this.stations.get(key);
-    if (!st) { st = { key, name: s.name, lon: s.lon, lat: s.lat, lines: new Set() }; this.stations.set(key, st); }
-    return st;
-  }
-
-  ingest(d, zq) {
-    const stops = d.stops.map(s => this.station(s));
-    const colourOfRoute = new Map();
-    for (const p of d.polylines) p.routeIndexes.forEach((ri, k) => { if (p.colors && p.colors[k]) colourOfRoute.set(ri, p.colors[k]); });
-    const shapes = [];
-    d.routes.forEach((r, ri) => {
-      if (!r.segments.length || !classOf(r.mode)) return;
-      const tr = r.transitRoutes[0] || {};
-      const line = ensureLine({ mode: r.mode, name: tr.shortName, colour: colourOfRoute.get(ri), longName: tr.longName });
-      if (!line) return;
-      this.seen.add(line.cls);
-      line.routes.add(r.routeIdx);
-      if (zq < line.minZoom) line.minZoom = zq;
-      line.numStops = Math.max(line.numStops || 0, r.numStops || 0);
-      const group = GROUP[line.cls];
-      for (const sg of r.segments) {
-        const a = stops[sg.from], b = stops[sg.to];
-        if (!a || !b || a === b) continue;
-        a.lines.add(line); b.lines.add(line);
-        const key = group + "|" + (a.key < b.key ? a.key + ">" + b.key : b.key + ">" + a.key);
-        let seg = this.segs.get(key);
-        if (!seg) {
-          const coords = shapes[sg.polyline] ??= shape(d.polylines[sg.polyline]?.polyline);
-          if (coords.length < 2) continue;
-          seg = { key, coords, lines: new Set() };
-          this.segs.set(key, seg);
-        }
-        seg.lines.add(line);
-      }
-    });
-  }
-
-  visible(l) { return this.enabled.has(l.cls) && l.minZoom <= this.bucket() && Math.floor(this.map.getZoom()) >= DRAW_FROM[l.cls]; }
-
-  render() {
-    const src = this.map.getSource("network"), stSrc = this.map.getSource("stations");
-    if (!src || !stSrc) return;
-    // Colours: lines without one avoid the colours of lines they meet.
-    for (const st of this.stations.values()) for (const l of st.lines) if (!l.colour) colourOf(l, st.lines);
-    const feats = [];
-    for (const seg of this.segs.values()) {
-      // Lines that look the same (same kind, same colour: every grey train, buses in the shared blue)
-      // are one stroke; side by side they couldn't be told apart anyway. A tap lists them all.
-      const groups = new Map();
-      for (const l of seg.lines) {
-        if (!this.visible(l)) continue;
-        const vk = l.cls + "|" + colourOf(l);
-        if (!groups.has(vk)) groups.set(vk, []);
-        groups.get(vk).push(l);
-      }
-      if (!groups.size) continue;
-      const members = [...groups.values()].map(ls => ls.sort(compareLines)).sort((a, b) => compareLines(a[0], b[0]));
-      const total = members.reduce((s, ls) => s + WIDTH[ls[0].cls], 0);
-      let acc = -total / 2;
-      for (const ls of members) {
-        const l = ls[0], w = WIDTH[l.cls], off = this.spread ? acc + w / 2 : 0;
-        acc += w;
-        feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: seg.coords },
-          properties: { line: l.key, lines: ls.map(x => x.key).join("\n"), c: colourOf(l), w, off, s: 10 - CLASS_ORDER[l.cls], dash: l.cls === "train" && !l.raw ? 1 : 0 } });
-      }
-    }
-    src.setData({ type: "FeatureCollection", features: feats });
-    const stations = [];
-    for (const st of this.stations.values()) {
-      const ls = [...st.lines].filter(l => this.visible(l));
-      if (!ls.length) continue;
-      const on = !this.focusKey || ls.some(l => l.key === this.focusKey);
-      stations.push({ type: "Feature", geometry: { type: "Point", coordinates: [st.lon, st.lat] },
-        properties: { key: st.key, name: st.name, n: ls.length, rail: ls.some(l => l.cls === "train" || l.cls === "metro") ? 1 : 0, o: this.dimmed ? 0.35 : on ? 1 : 0.3 } });
-    }
-    stSrc.setData({ type: "FeatureCollection", features: stations });
-    this.applyFocus();
-    this.emit();
-  }
-
-  /** Fade every line but one (a followed line), or all of them (a planned trip). */
-  setFocus(key, dimAll = false) {
-    if (this.focusKey === key && this.dimmed === dimAll) return;
-    this.focusKey = key; this.dimmed = dimAll;
     this.render();
   }
+  pump() {
+    while (this.active < 3 && this.queue.length) {
+      const t = this.queue.shift();
+      this.active++;
+      this.tiles.set(t.key, "loading");
+      this.pending = this.pending || new Map();
+      this.pending.set(t.key, t);
+      this.worker.postMessage({ type: "tile", key: t.key, zq: t.zq, box: t.box });
+    }
+    this.emit();
+  }
+  onWorker(m) {
+    if (m.type === "tile") {
+      const t = this.pending.get(m.key); this.pending.delete(m.key);
+      this.active--;
+      this.tiles.set(m.key, m.status);
+      if (m.status === "split" && t && t.depth < 3) {
+        // Too dense for one request: its four quarters instead.
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+          const x = t.x * 2 + dx, y = t.y * 2 + dy, g = t.g + 1, key = `${t.zq}/${g}/${x}/${y}`;
+          this.tiles.set(key, "queued");
+          this.queue.unshift({ key, zq: t.zq, x, y, g, depth: t.depth + 1, box: tileBox(x, y, g) });
+        }
+      }
+      if (m.status === "done") this.renderSoon(true);
+      this.pump();
+    } else if (m.type === "data") {
+      for (const l of m.lines) {
+        const r = ensureLine({ mode: l.mode, name: l.name, colour: l.raw, textColour: l.rawText, longName: l.longName });
+        if (!r) continue;
+        if (l.colour) r.colour = l.colour;
+        r.wid = l.nid; this.byId.set(l.nid, r.key);
+        for (const id of l.routes) r.routes.add(id);
+        r.numStops = Math.max(r.numStops || 0, l.numStops); r.minZoom = Math.min(r.minZoom, l.minZoom);
+      }
+      for (const s of m.seen) this.seen.add(s);
+      this.setData("network", m.network);
+      this.setData("stations", m.stations);
+      this.lastMs = m.ms;
+      this.emit();
+    } else if (m.type === "error") {
+      console.error("Network worker:", m.message);
+    } else if (m.type === "answer") {
+      this.asks.get(m.id)?.(m.result); this.asks.delete(m.id);
+    }
+  }
+  setData(name, buf) {
+    const src = this.map.getSource(name);
+    if (!src) return;
+    const url = URL.createObjectURL(new Blob([buf], { type: "application/json" }));
+    src.setData(url);
+    this.urls.push(url);
+    while (this.urls.length > 6) URL.revokeObjectURL(this.urls.shift());
+  }
+  /** Ask the worker to rebuild the map data — only when something that matters changed, or the
+   *  view left the area built last time (the worker builds three screens around the view). */
+  render(force = false) {
+    const b = this.map.getBounds(), w = b.getWest(), e = b.getEast(), s = b.getSouth(), n = b.getNorth();
+    const inside = this.box && w >= this.box[0] && e <= this.box[2] && s >= this.box[1] && n <= this.box[3];
+    const opts = { zoom: Math.floor(this.map.getZoom()), bucket: this.bucket(), enabled: [...this.enabled].sort(), spread: this.spread };
+    const sig = JSON.stringify(opts);
+    if (!force && sig === this.lastSent && inside) return;
+    const dx = e - w, dy = n - s;
+    this.box = [w - dx, Math.max(-85, s - dy), e + dx, Math.min(85, n + dy)];
+    this.lastSent = sig;
+    this.worker.postMessage({ type: "render", opts: { ...opts, box: this.box } });
+  }
+  ask(q, args) { return new Promise(res => { const id = ++this.askId; this.asks.set(id, res); this.worker.postMessage({ type: "query", id, q, args }); }); }
+
+  /** Fade every line but one (a followed line), or everything (a planned trip). */
+  setFocus(key, dimAll = false) { this.focusKey = key; this.dimmed = dimAll; this.applyFocus(); }
   applyFocus() {
     const m = this.map; if (!m.getLayer("net-lines")) return;
-    const op = this.dimmed ? 0.22 : this.focusKey ? ["case", ["in", this.focusKey, ["get", "lines"]], 1, 0.16] : 1;
-    m.setPaintProperty("net-lines", "line-opacity", op);
-    m.setPaintProperty("net-casing", "line-opacity", op);
-    m.setPaintProperty("net-rail-dash", "line-opacity", this.dimmed || this.focusKey ? 0.0001 : 0.9);
+    const k = "\n" + (registry.get(this.focusKey)?.wid ?? "none") + "\n";
+    const op = this.dimmed ? 0.2 : this.focusKey ? ["case", ["in", k, ["get", "lines"]], 1, 0.13] : 1;
+    for (const id of ["net-lines", "net-casing"]) m.setPaintProperty(id, "line-opacity", op);
+    m.setPaintProperty("net-rail-dash", "line-opacity", this.dimmed || this.focusKey ? 0 : 0.9);
+    const sop = this.dimmed ? 0.4 : this.focusKey ? ["case", ["in", k, ["get", "lines"]], 1, 0.35] : 1;
+    m.setPaintProperty("stations", "icon-opacity", sop);
+    for (const id of ["station-links", "station-links-casing"]) m.setPaintProperty(id, "line-opacity", sop);
+    m.setPaintProperty("station-labels", "text-opacity", sop);
   }
 
-  // ---- Questions the interface asks ----
-
-  stationsNear([lon, lat], radius) {
-    const out = [];
-    for (const st of this.stations.values()) {
-      if (Math.abs(st.lat - lat) > 0.01 || Math.abs(st.lon - lon) > 0.015) continue;
-      if (metres([lon, lat], [st.lon, st.lat]) <= radius) out.push(st);
-    }
-    return out;
+  // ---- Questions the interface asks (answered by the worker) ----
+  async diagram(line, stops) {
+    const r = await this.ask("diagram", { cls: line.cls, stops: stops.map(s => ({ key: s.key, lon: s.lon, lat: s.lat })) });
+    const get = ks => ks.map(k => registry.get(k)).filter(l => l && l !== line && this.enabled.has(l.cls));
+    return { meet: r.meet.map(get), along: r.along.map(get) };
   }
-  /** Lines stopping within `radius` m of a point. */
-  linesNear(pt, radius = 140) {
-    const set = new Set();
-    for (const st of this.stationsNear(pt, radius)) for (const l of st.lines) if (this.enabled.has(l.cls)) set.add(l);
-    return set;
+  async linesInView() {
+    const b = this.map.getBounds();
+    const keys = await this.ask("inview", { box: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] });
+    return keys.map(k => registry.get(k)).filter(Boolean);
   }
-  /** Lines running along the stretch between two stations (same kind of way as `cls`). */
-  linesAlong(aKey, bKey, cls) {
-    const key = GROUP[cls] + "|" + (aKey < bKey ? aKey + ">" + bKey : bKey + ">" + aKey);
-    const seg = this.segs.get(key);
-    return seg ? [...seg.lines].filter(l => this.enabled.has(l.cls)) : [];
-  }
-  linesInView() {
-    const b = this.map.getBounds(), set = new Set();
-    for (const st of this.stations.values()) if (b.contains([st.lon, st.lat])) for (const l of st.lines) if (this.visible(l)) set.add(l);
-    return [...set].sort(compareLines);
-  }
+  group(key) { return this.ask("group", { key }); }
+  /** Line keys from a map feature's "lines" property. */
+  keysOf(prop) { return String(prop || "").split("\n").filter(Boolean).map(id => this.byId.get(+id)).filter(Boolean); }
 }

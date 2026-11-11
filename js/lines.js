@@ -51,7 +51,7 @@ export function ensureLine({ mode, name, colour, textColour, longName, agency })
   let l = registry.get(key);
   if (!l) {
     l = { key, cls, mode, name, raw: normColour(colour), rawText: normColour(textColour), longName: longName || "", agency: agency || "",
-      routes: new Set(), minZoom: 99, colour: null };
+      routes: new Set(), minZoom: 99, colour: null, nid: registry.size + 1, rank: null };
     registry.set(key, l);
   }
   if (longName && !l.longName) l.longName = longName;
@@ -84,8 +84,16 @@ export function textOn(l) {
   return (0.299 * r + 0.587 * g + 0.114 * b) > 170 ? "#111" : "#fff";
 }
 
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Trains first, then metro, trams, buses…; by number within a kind ("2" before "10"). Uses a precomputed rank when there is one. */
 export const compareLines = (a, b) =>
-  CLASS_ORDER[a.cls] - CLASS_ORDER[b.cls] || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  (a.rank != null && b.rank != null) ? a.rank - b.rank : CLASS_ORDER[a.cls] - CLASS_ORDER[b.cls] || collator.compare(a.name, b.name);
+/** Rank every known line once, so sorting thousands of bundles is cheap. */
+export function rankLines() {
+  const all = [...registry.values()];
+  all.forEach(l => { l.rank = null; });
+  all.sort(compareLines).forEach((l, i) => { l.rank = i; });
+}
 
 export const badge = (l, size = "") =>
   `<span class="badge ${l.cls} ${size}" style="--c:${colourOf(l)};--t:${textOn(l)}" title="${esc(classLabel(l.cls) + " " + l.name)}">${esc(l.name)}</span>`;
