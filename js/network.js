@@ -105,6 +105,9 @@ export class Network {
     this.active = 0;
     this.enabled = new Set(["train", "metro", "tram", "bus", "ferry", "other"]);
     this.spread = true;
+    this.liveOnly = true;       // only lines with something running now
+    // What's running changes: refresh it every three minutes while the page is open.
+    setInterval(() => { if (!document.hidden) this.worker.postMessage({ type: "live" }); }, 180000);
     this.focusKey = null;
     this.dimmed = false;
     this.seen = new Set();
@@ -199,7 +202,7 @@ export class Network {
   render(force = false) {
     const b = this.map.getBounds(), w = b.getWest(), e = b.getEast(), s = b.getSouth(), n = b.getNorth();
     const inside = this.box && w >= this.box[0] && e <= this.box[2] && s >= this.box[1] && n <= this.box[3];
-    const opts = { zoom: Math.floor(this.map.getZoom()), bucket: this.bucket(), enabled: [...this.enabled].sort(), spread: this.spread };
+    const opts = { zoom: Math.floor(this.map.getZoom()), bucket: this.bucket(), enabled: [...this.enabled].sort(), spread: this.spread, liveOnly: this.liveOnly };
     const sig = JSON.stringify(opts);
     if (!force && sig === this.lastSent && inside) return;
     const dx = e - w, dy = n - s;

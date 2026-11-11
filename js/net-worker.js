@@ -261,8 +261,18 @@ function simplify(pts, tol) {
 }
 const ll = ([x, y]) => [Math.round(ilon(x) * 1e5) / 1e5, Math.round(ilat(y) * 1e5) / 1e5];
 
-let opts = { zoom: 13, bucket: 11, spread: true, enabledSet: new Set(["train", "metro", "tram", "bus", "ferry", "other"]), box: [-180, -85, 180, 85], mbox: [-2e7, -2e7, 2e7, 2e7] };
-const visible = l => opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls];
+let opts = { zoom: 13, bucket: 11, spread: true, liveOnly: true, enabledSet: new Set(["train", "metro", "tram", "bus", "ferry", "other"]), box: [-180, -85, 180, 85], mbox: [-2e7, -2e7, 2e7, 2e7] };
+/* Lines running right now: every vehicle on the move in a tile (from now to 30 minutes ahead),
+   by kind and name. A line with nothing running isn't drawn, and neither are its stops. */
+const live = new Map();          // tile key → { box, names:Set } | { box, failed:true }
+let running = null;              // Set of "cls|name", or null while unknown
+const norm = n => String(n || "").toLowerCase().replace(/\s+/g, "");
+function recomputeRunning() {
+  const vals = [...live.values()];
+  running = !vals.length || vals.some(v => v.failed) ? null : new Set(vals.flatMap(v => [...v.names]));
+}
+const isRunning = l => !opts.liveOnly || !running || running.has(l.cls + "|" + norm(l.name));
+const visible = l => opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls] && isRunning(l);
 
 function buildNetwork() {
   const out = [];
@@ -429,10 +439,34 @@ async function loadTile(t) {
     }
     const d = await res.json();
     try { ingest(d, t.zq, t.box); } catch (err) { postMessage({ type: "error", message: String(err && err.stack || err) }); }
+    loadLive(t);
     postMessage({ type: "tile", key: t.key, status: "done" });
   } catch (err) {
     postMessage({ type: "tile", key: t.key, status: err.name === "AbortError" ? "cancelled" : "failed" });
   } finally { inflight.delete(t.key); }
+}
+
+async function loadLive(t) {
+  const [w, s, e, n] = t.box, f = v => v.toFixed(5), now = Date.now();
+  const from = new Date(now - 5 * 60000).toISOString(), to = new Date(now + 30 * 60000).toISOString();
+  try {
+    const res = await fetch(`${API}/v6/map/trips?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&startTime=${from}&endTime=${to}&precision=1&language=en`);
+    if (!res.ok) throw new Error(res.status);
+    const names = new Set();
+    for (const seg of await res.json()) {
+      const cls = classOf(seg.mode);
+      if (!cls) continue;
+      for (const tr of seg.trips) {
+        const dn = norm(tr.routeShortName || tr.displayName);
+        names.add(cls + "|" + dn);
+        // Trains are often shown as "IC 1234" but named "1234" (or the other way round).
+        if (cls === "train") { const parts = String(tr.displayName || "").trim().split(/\s+/); names.add(cls + "|" + norm(parts[parts.length - 1])); }
+      }
+    }
+    live.set(t.key, { box: t.box, zq: t.zq, names, at: now });
+  } catch { live.set(t.key, { box: t.box, zq: t.zq, failed: true, at: now }); }
+  recomputeRunning();
+  render();
 }
 
 function query(q, a) {
@@ -440,7 +474,7 @@ function query(q, a) {
     const out = new Set(), cosl = Math.cos(lat * RAD);
     for (const st of stations.values()) {
       if (Math.abs(st.lat - lat) > 0.006 || Math.abs(st.lon - lon) > 0.009) continue;
-      if (Math.hypot((st.lon - lon) * 111320 * cosl, (st.lat - lat) * 110540) <= radius) for (const l of st.lines) out.add(l.key);
+      if (Math.hypot((st.lon - lon) * 111320 * cosl, (st.lat - lat) * 110540) <= radius) for (const l of st.lines) if (isRunning(l)) out.add(l.key);
     }
     return [...out];
   };
@@ -450,7 +484,7 @@ function query(q, a) {
       meet: a.stops.map(s => linesNear(s.lon, s.lat, 150)),
       along: a.stops.slice(0, -1).map((s, i) => {
         const b = a.stops[i + 1].key, k = g + "|" + (s.key < b ? s.key + ">" + b : b + ">" + s.key);
-        return [...(pairs.get(k) || [])].map(l => l.key);
+        return [...(pairs.get(k) || [])].filter(isRunning).map(l => l.key);
       }),
     };
   }
@@ -466,6 +500,14 @@ function query(q, a) {
 globalThis.onmessage = ({ data: m }) => {
   if (m.type === "tile") loadTile(m);
   else if (m.type === "cancel") inflight.get(m.key)?.abort();
+  else if (m.type === "live") {
+    // Refresh what's running, for the tiles around the view.
+    const [bw, bs, be, bn] = opts.box;
+    for (const [key, v] of live) {
+      if (v.zq !== opts.bucket || v.box[2] < bw || v.box[0] > be || v.box[3] < bs || v.box[1] > bn) continue;
+      loadLive({ key, box: v.box, zq: v.zq });
+    }
+  }
   else if (m.type === "render") {
     const b = m.opts.box;
     opts = { ...m.opts, enabledSet: new Set(m.opts.enabled), mbox: [mx(b[0]), my(b[1]), mx(b[2]), my(b[3])] };

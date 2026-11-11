@@ -4,13 +4,13 @@
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
 import { Network } from "./network.js";
-import { diagramModel, diagramHtml, drawDiagram } from "./diagram.js";
+import { diagramModel, diagramHtml, drawDiagram, summaryHtml } from "./diagram.js";
 import { CLASSES, badge, classLabel, classOf, colourOf, textOn, compareLines, lineOfStopTime, registry } from "./lines.js";
 import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce, store } from "./util.js";
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -32,6 +32,7 @@ map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e
 
 const net = new Network(map);
 net.spread = settings.spread;
+net.liveOnly = settings.liveOnly;
 net.enabled = new Set(settings.modes);
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -338,7 +339,7 @@ function loadStop(s, quiet) {
 /* ============================== Line ============================== */
 
 const stopOf = p => ({ name: p.name, key: p.parentId || p.stopId, id: p.stopId, lon: p.lon, lat: p.lat, tz: p.tz,
-  time: p.departure || p.arrival, sched: p.scheduledDeparture || p.scheduledArrival, track: p.track });
+  time: p.departure || p.arrival, arr: p.arrival, dep: p.departure, sched: p.scheduledDeparture || p.scheduledArrival, track: p.track });
 
 VIEWS.line = {
   sheet: "half",
@@ -353,15 +354,11 @@ VIEWS.line = {
     if (s.dataErr) return head + failed(s.dataErr, "reload-line");
     if (!d || !s.model) return head + loading(6);
     const first = d.stops[0], last = d.stops[d.stops.length - 1];
-    const run = first.time && last.time ? (Date.parse(last.time) - Date.parse(first.time)) / 1000 : null;
-    const anyMore = s.model.meet.some(m => m.length > 3);
     return head + `<div class="seg" role="group" aria-label="Direction">
         <button aria-pressed="true">To ${esc(last.name)}</button>
         <button data-act="reverse" aria-pressed="false"${s["rev$"] ? " disabled" : ""}>${s["rev$"] ? "Finding…" : `To ${esc(first.name)}`}</button></div>
-      <div class="diaghead"><span class="t">${d.timed ? `Trip at ${clock(first.time, first.tz)}${d.live ? " · live" : ""}` : "Stops"}</span><span class="sp"></span>
-        ${anyMore ? `<button class="link" data-act="expand-all">${s.expandAll ? "Fewer connections" : "All connections"}</button>` : ""}</div>
-      ${diagramHtml(l, d.stops, s.model, { expandAll: s.expandAll, expanded: s.expanded, current: s.at })}
-      <div class="facts"><div><small>Journey</small><b>${run != null ? duration(run) : "–"}</b></div><div><small>Stops</small><b>${d.stops.length}</b></div><div><small>Times</small><b>${d.timed ? d.live ? "Live" : "Timetable" : "None now"}</b></div></div>`;
+      ${diagramHtml(l, d.stops, s.model, { expanded: s.expanded, current: s.at, rightLabel: d.timed ? (d.live ? "live trip" : "next trip") : "" })}
+      ${d.timed ? summaryHtml(d.stops, s.back) : `<p class="pad">Nothing of this line is running in the next hours.</p>`}`;
   },
   after(s) { if (s.data && s.model) requestAnimationFrame(() => drawDiagram(registry.get(s.key), s.data.stops, s.model)); },
 };
@@ -393,23 +390,35 @@ function loadLine(s) {
       if (!d) d = { stops: rstops.map(stopOf), shape: r.segments.flatMap(x => shape(rd.polylines[x.polyline]?.polyline)), timed: false };
     }
     s.model = await diagramModel(l, d.stops, net);
+    s.back = null;
+    if (d.timed) findBack(l, d).then(async st => {
+      if (!st || s.data !== d) return;
+      const b = await tripData(st.tripId), bs = b.stops;
+      const journey = (Date.parse(bs[bs.length - 1].arr || bs[bs.length - 1].time) - Date.parse(bs[0].dep || bs[0].time)) / 1000;
+      const turn = Math.max(0, Math.min(3600, (Date.parse(bs[0].dep || bs[0].time) - Date.parse(d.stops[d.stops.length - 1].arr || d.stops[d.stops.length - 1].time)) / 1000));
+      if (journey > 0) { s.back = { journey, turn }; refresh(s); }
+    }).catch(() => {});
     const coords = d.shape.length > 1 ? d.shape : d.stops.map(x => [x.lon, x.lat]);
     setOverlay("focus", { type: "FeatureCollection", features: [{ type: "Feature", properties: { c: colourOf(l) }, geometry: { type: "LineString", coordinates: coords } }] });
     frame(coords, 15.5);
     return d;
   });
 }
+/** The next trip of this line leaving from the far end, back towards the start. */
+async function findBack(l, d) {
+  const last = d.stops[d.stops.length - 1], firstName = d.stops[0].name;
+  const dep = await api.departures({ stopId: last.key, n: 100, time: last.arr || last.time });
+  return dep.stopTimes.find(x => lineOfStopTime(x) === l && (x.tripTo?.name === firstName || x.headsign === firstName))
+    || dep.stopTimes.find(x => lineOfStopTime(x) === l && x.tripTo?.name !== last.name);
+}
 async function reverseLine(s) {
   const d = s.data, l = registry.get(s.key);
   if (!d || s["rev$"]) return;
   s["rev$"] = true; refresh(s);
   try {
-    const last = d.stops[d.stops.length - 1], firstName = d.stops[0].name;
-    const dep = await api.departures({ stopId: last.key, n: 100 });
-    const st = dep.stopTimes.find(x => lineOfStopTime(x) === l && (x.tripTo?.name === firstName || x.headsign === firstName))
-      || dep.stopTimes.find(x => lineOfStopTime(x) === l && x.tripTo?.name !== last.name);
+    const st = await findBack(l, d);
     if (!st) throw new Error("no trip back soon");
-    Object.assign(s, { tripId: st.tripId, data: null, model: null, at: null, "rev$": false });
+    Object.assign(s, { tripId: st.tripId, data: null, model: null, at: null, back: null, "rev$": false });
     loadLine(s);
   } catch (e) { s["rev$"] = false; toast(`Couldn't find the other direction (${e.message}).`); refresh(s); }
 }
@@ -639,7 +648,8 @@ function settingsPage() {
       <p class="sec">Appearance</p>
       <div class="seg" role="group" aria-label="Theme">${["system", "light", "dark"].map(t => `<button data-theme-set="${t}" aria-pressed="${settings.theme === t}">${cap(t)}</button>`).join("")}</div>
       <p class="sec">Map</p>
-      <div class="group">${sw(settings.spread, 'data-set="spread"', "Lines side by side", "Lines sharing a street or track are drawn next to each other")}</div>
+      <div class="group">${sw(settings.liveOnly, 'data-set="live"', "Only lines running now", "Lines with nothing on the move in the next half hour are left out")}
+        ${sw(settings.spread, 'data-set="spread"', "Lines side by side", "Lines sharing a street or track are drawn next to each other")}</div>
       <p class="sec">Show</p>
       <div class="group">${CLASSES.map(c => sw(net.enabled.has(c.id), `data-mode="${c.id}"`, c.label, "", c.icon)).join("")}</div>
       <p class="sec">Your data</p>
@@ -679,7 +689,6 @@ document.addEventListener("click", async e => {
       } catch (err) { toast(err.message); }
       return;
     }
-    case "expand-all": s.expandAll = !s.expandAll; return refresh(s);
     case "reverse": return reverseLine(s);
     case "dir-stop": T.to = { name: s.name, sub: "Stop", lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "trip" });
     case "dir-place": T.to = { name: s.name, sub: s.sub, lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "trip" });
@@ -716,6 +725,7 @@ document.addEventListener("click", async e => {
     return refresh(s);
   }
   if (d.only) { s.only = s.only === d.only ? null : d.only; return refresh(s); }
+  if (d.set === "live") { settings.liveOnly = net.liveOnly = !settings.liveOnly; saveSettings(); net.render(true); $("#page").innerHTML = settingsPage(); return; }
   if (d.set === "spread") { settings.spread = net.spread = !settings.spread; saveSettings(); net.render(); $("#page").innerHTML = settingsPage(); return; }
   if (d.themeSet) { settings.theme = d.themeSet; saveSettings(); applyTheme(); $("#page").innerHTML = settingsPage(); return; }
   if (d.tripMode) { T.mode = d.tripMode; return refresh(s); }
