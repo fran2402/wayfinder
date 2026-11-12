@@ -54,16 +54,17 @@ class Graph {
     this.grid.get(k).push(id);
     return id;
   }
-  edge(a, b, lines, touched) {
+  edge(a, b, routes, touched) {
     if (a === b) return;
     const k = a < b ? a * 67108864 + b : b * 67108864 + a;
     let e = this.edges.get(k);
-    if (!e) { e = { a: Math.min(a, b), b: Math.max(a, b), lines: new Set() }; this.edges.set(k, e); this.nodes[a].edges.push(e); this.nodes[b].edges.push(e); }
-    for (const l of lines) e.lines.add(l);
+    if (!e) { e = { a: Math.min(a, b), b: Math.max(a, b), routes: new Set() }; this.edges.set(k, e); this.nodes[a].edges.push(e); this.nodes[b].edges.push(e); }
+    for (const r of routes) e.routes.add(r);
     touched?.push(e);
   }
-  /** Lay a shape (mercator points) onto the graph, inside a box. */
-  add(pts, lines, box) {
+  /** Lay a shape (mercator points) onto the graph, inside a box, for some route variants.
+   *  A gap longer than maxJump between two points is a broken shape, not a road: it's skipped. */
+  add(pts, routes, box, maxJump) {
     const step = this.r * 0.7, touched = [];
     let prev = -1, prev2 = -1;
     const visit = (x, y) => {
@@ -71,7 +72,7 @@ class Graph {
       const n = this.node(x, y);
       if (n === prev) return;
       if (n === prev2) { prev = n; return; } // jitter between two nodes
-      if (prev >= 0) this.edge(prev, n, lines, touched);
+      if (prev >= 0) this.edge(prev, n, routes, touched);
       prev2 = prev; prev = n;
     };
     for (let i = 0; i < pts.length; i++) {
@@ -80,7 +81,9 @@ class Graph {
       const [px, py] = pts[i - 1];
       // Pieces wholly outside the box (most of a long-distance train's route) cost nothing.
       if ((x < box[0] && px < box[0]) || (x > box[2] && px > box[2]) || (y < box[1] && py < box[1]) || (y > box[3] && py > box[3])) { prev = prev2 = -1; continue; }
-      const len = Math.hypot(x - px, y - py), k = Math.ceil(len / step);
+      const len = Math.hypot(x - px, y - py);
+      if (len > maxJump) { prev = prev2 = -1; visit(x, y); continue; }
+      const k = Math.ceil(len / step);
       for (let j = 1; j <= k; j++) visit(px + (x - px) * j / k, py + (y - py) * j / k);
     }
     return touched;
@@ -93,6 +96,7 @@ const graphs = new Map();      // `${zq}|${group}` → Graph
 const stations = new Map();    // stop key → { key, name, lon, lat, lines:Set, gid }
 const pairs = new Map();       // `${group}|a>b` → Set(line): lines running between two stations
 const seen = new Set();        // kinds of transport met
+const variants = new Map();    // route index → { idx, line, seq:[station], pairs:Set("stopId>stopId"), run }
 const dirty = new Set();       // lines to send to the main thread
 let groupsDirty = true;
 const groups = new Map();      // gid → { gid, name, members:[station] }
@@ -121,7 +125,7 @@ function decode(str, precision = 6) {
 function station(s) {
   const key = s.parentId || s.stopId;
   let st = stations.get(key);
-  if (!st) { st = { key, name: s.name, lon: s.lon, lat: s.lat, lines: new Set(), gid: null }; stations.set(key, st); groupsDirty = true; }
+  if (!st) { st = { key, name: s.name, lon: s.lon, lat: s.lat, lines: new Set(), routes: new Set(), gid: null }; stations.set(key, st); groupsDirty = true; }
   return st;
 }
 
@@ -142,25 +146,34 @@ function ingest(d, zq, box) {
     if (zq < line.minZoom) line.minZoom = zq;
     line.numStops = Math.max(line.numStops || 0, r.numStops || 0);
     dirty.add(line);
+    // The variant: its stops in order, and its stop-to-stop hops (to tell whether it runs now).
+    // A tile only carries the part of a route inside it: pieces from several tiles add up.
+    let v = variants.get(r.routeIdx);
+    if (r.segments.length) {
+      if (!v) { v = { idx: r.routeIdx, line, seq: [], pairs: new Set(), run: true, numStops: r.numStops || 0 }; variants.set(r.routeIdx, v); }
+      const ids = [r.segments[0].from, ...r.segments.map(x => x.to)], piece = [];
+      ids.forEach((si, k) => { const st = stops[si]; if (st && st !== piece[piece.length - 1]) piece.push(st); if (k) v.pairs.add(d.stops[ids[k - 1]].stopId + ">" + d.stops[si].stopId); });
+      if (piece.length > v.seq.length) v.seq = piece;
+      for (const st of piece) { st.lines.add(line); st.routes.add(v); }
+    }
     for (const sg of r.segments) {
       const a = stops[sg.from], b = stops[sg.to];
       if (!a || !b || a === b) continue;
-      a.lines.add(line); b.lines.add(line);
       const pk = GROUP[line.cls] + "|" + (a.key < b.key ? a.key + ">" + b.key : b.key + ">" + a.key);
       if (!pairs.has(pk)) pairs.set(pk, new Set());
       pairs.get(pk).add(line);
     }
-    return line;
+    return v || null;
   });
   // Shapes: each polyline once, with every line that uses it, per kind of way.
   const copies = new Map();
   d.polylines.forEach(p => {
     const byGroup = new Map();
     for (const ri of p.routeIndexes) {
-      const l = lineOf[ri]; if (!l || !d.routes[ri].segments.length) continue;
-      const g = GROUP[l.cls];
+      const v = lineOf[ri]; if (!v) continue;
+      const g = GROUP[v.line.cls];
       if (!byGroup.has(g)) byGroup.set(g, new Set());
-      byGroup.get(g).add(l);
+      byGroup.get(g).add(v);
     }
     if (!byGroup.size) return;
     const pts = decode(p.polyline.points, p.polyline.precision ?? 6);
@@ -169,11 +182,13 @@ function ingest(d, zq, box) {
     let len = 0;
     for (let i = 1; i < pts.length; i++) len += Math.abs(pts[i][0] - pts[i - 1][0]) + Math.abs(pts[i][1] - pts[i - 1][1]);
     const [a, b] = [pts[0], pts[pts.length - 1]], q = v => Math.round(v / 60);
-    for (const [g, ls] of byGroup) {
+    const stretch = 1 / Math.cos(ilat(a[1]) * RAD); // mercator metres per metre here
+    for (const [g, vs] of byGroup) {
       const dk = g + "|" + q(a[0]) + "," + q(a[1]) + "|" + q(b[0]) + "," + q(b[1]) + "|" + Math.round(Math.log(len + 1) * 12);
       const known = copies.get(dk);
-      if (known) { for (const e of known) for (const l of ls) e.lines.add(l); continue; }
-      copies.set(dk, graphFor(zq, g).add(pts, ls, mbox));
+      if (known) { for (const e of known) for (const v of vs) e.routes.add(v); continue; }
+      const maxJump = (g === "rail" || g === "water" ? 8000 : 1200) * stretch;
+      copies.set(dk, graphFor(zq, g).add(pts, vs, mbox, maxJump));
     }
   });
 }
@@ -266,13 +281,31 @@ let opts = { zoom: 13, bucket: 11, spread: true, liveOnly: true, enabledSet: new
    by kind and name. A line with nothing running isn't drawn, and neither are its stops. */
 const live = new Map();          // tile key → { box, names:Set } | { box, failed:true }
 let running = null;              // Set of "cls|name", or null while unknown
+let runningHops = new Set();     // "stopId>stopId" hops vehicles are making now
+let runDirty = true;
 const norm = n => String(n || "").toLowerCase().replace(/\s+/g, "");
 function recomputeRunning() {
   const vals = [...live.values()];
   running = !vals.length || vals.some(v => v.failed) ? null : new Set(vals.flatMap(v => [...v.names]));
+  runningHops = new Set(vals.flatMap(v => v.hops ? [...v.hops] : []));
+  runDirty = true;
 }
+/** Which variants run now: a vehicle is on one of their hops. A line none of whose loaded variants
+ *  shows a vehicle (but whose name does) keeps all its variants. */
+function markRunning() {
+  if (!runDirty) return;
+  runDirty = false;
+  for (const l of registry.values()) l.anyRun = false;
+  for (const v of variants.values()) {
+    v.run = false;
+    for (const h of v.pairs) if (runningHops.has(h)) { v.run = true; break; }
+    if (v.run) v.line.anyRun = true;
+  }
+}
+const variantRuns = v => !opts.liveOnly || !running || (isRunning(v.line) && (v.run || !v.line.anyRun));
 const isRunning = l => !opts.liveOnly || !running || running.has(l.cls + "|" + norm(l.name));
 const visible = l => opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls] && isRunning(l);
+const shownVariant = v => visible(v.line) && variantRuns(v);
 
 function buildNetwork() {
   const out = [];
@@ -283,9 +316,9 @@ function buildNetwork() {
     for (const e of g.edges.values()) {
       if (!inBox(g.nodes[e.a]) && !inBox(g.nodes[e.b])) continue;
       // One stroke per line name (feeds disagree on colours: "S3" twice) and per look (same kind, same colour).
-      const byName = new Map(), byLook = new Map();
-      for (const l of e.lines) {
-        if (!visible(l)) continue;
+      const byName = new Map(), byLook = new Map(), ls0 = new Set();
+      for (const v of e.routes) if (shownVariant(v)) ls0.add(v.line);
+      for (const l of ls0) {
         const nk = l.cls + "|" + l.name, lk = l.cls + "|" + drawColour(l);
         let grp = byName.get(nk) || byLook.get(lk);
         if (!grp) grp = { c: drawColour(l), ls: [] };
@@ -359,7 +392,7 @@ function buildStations() {
     if (m0.lon < bw || m0.lon > be || m0.lat < bs || m0.lat > bn) continue;
     const shown = [];
     for (const st of g.members) {
-      const ls = [...st.lines].filter(visible);
+      const ls = [...new Set([...st.routes].filter(shownVariant).map(v => v.line))];
       if (!ls.length) continue;
       const kinds = new Set(ls.map(l => l.cls));
       shown.push({ st, ls, kind: KIND_RANK.find(k => kinds.has(k)) });
@@ -414,6 +447,7 @@ async function render() {
   try {
     const t0 = performance.now();
     rankLines();
+    markRunning();
     const net = bytes(buildNetwork()), sta = bytes(buildStations());
     const lines = [...dirty].map(lineInfo); dirty.clear();
     postMessage({ type: "data", network: net, stations: sta, lines, seen: [...seen], ms: Math.round(performance.now() - t0) }, [net, sta]);
@@ -452,10 +486,11 @@ async function loadLive(t) {
   try {
     const res = await fetch(`${API}/v6/map/trips?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&startTime=${from}&endTime=${to}&precision=1&language=en`);
     if (!res.ok) throw new Error(res.status);
-    const names = new Set();
+    const names = new Set(), hops = new Set();
     for (const seg of await res.json()) {
       const cls = classOf(seg.mode);
       if (!cls) continue;
+      if (seg.from?.stopId && seg.to?.stopId) hops.add(seg.from.stopId + ">" + seg.to.stopId);
       for (const tr of seg.trips) {
         const dn = norm(tr.routeShortName || tr.displayName);
         names.add(cls + "|" + dn);
@@ -463,18 +498,19 @@ async function loadLive(t) {
         if (cls === "train") { const parts = String(tr.displayName || "").trim().split(/\s+/); names.add(cls + "|" + norm(parts[parts.length - 1])); }
       }
     }
-    live.set(t.key, { box: t.box, zq: t.zq, names, at: now });
+    live.set(t.key, { box: t.box, zq: t.zq, names, hops, at: now });
   } catch { live.set(t.key, { box: t.box, zq: t.zq, failed: true, at: now }); }
   recomputeRunning();
   render();
 }
 
 function query(q, a) {
+  markRunning();
   const linesNear = (lon, lat, radius) => {
     const out = new Set(), cosl = Math.cos(lat * RAD);
     for (const st of stations.values()) {
       if (Math.abs(st.lat - lat) > 0.006 || Math.abs(st.lon - lon) > 0.009) continue;
-      if (Math.hypot((st.lon - lon) * 111320 * cosl, (st.lat - lat) * 110540) <= radius) for (const l of st.lines) if (isRunning(l)) out.add(l.key);
+      if (Math.hypot((st.lon - lon) * 111320 * cosl, (st.lat - lat) * 110540) <= radius) for (const v of st.routes) if (variantRuns(v)) out.add(v.line.key);
     }
     return [...out];
   };
@@ -492,6 +528,29 @@ function query(q, a) {
     const [w, s, e, n] = a.box, out = new Set();
     for (const st of stations.values()) if (st.lon >= w && st.lon <= e && st.lat >= s && st.lat <= n) for (const l of st.lines) if (visible(l)) out.add(l.key);
     return [...out];
+  }
+  if (q === "variants") {
+    // Every loaded variant of a line, as station sequences (stops with one name are one station).
+    regroup();
+    const l = registry.get(a.key);
+    if (!l) return [];
+    return [...l.routes].map(i => variants.get(i)).filter(Boolean).map(v => ({ idx: v.idx, run: variantRuns(v), n: v.numStops, sig: v.seq.map(st => st.key).join(">") }));
+  }
+  if (q === "gids") {
+    // Stops → stations (stops with one name are one station), for a line diagram.
+    regroup();
+    return a.keys.map(k => { const st = stations.get(k); return st ? { gid: st.gid, name: groups.get(st.gid)?.name || st.name } : null; });
+  }
+  if (q === "shape") {
+    // The line as drawn on the map (its running variants), for highlighting.
+    const out = [];
+    for (const [gk, g] of graphs) {
+      if (+gk.split("|")[0] !== opts.bucket) continue;
+      for (const e of g.edges.values()) {
+        for (const v of e.routes) if (v.line.key === a.key && variantRuns(v)) { out.push([ll([g.nodes[e.a].x, g.nodes[e.a].y]), ll([g.nodes[e.b].x, g.nodes[e.b].y])]); break; }
+      }
+    }
+    return out;
   }
   if (q === "group") { regroup(); const st = stations.get(a.key); const g = st && groups.get(st.gid); return g ? { name: g.name, keys: g.members.map(m => m.key) } : null; }
   return null;

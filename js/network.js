@@ -229,7 +229,18 @@ export class Network {
   // ---- Questions the interface asks (answered by the worker) ----
   async diagram(line, stops) {
     const r = await this.ask("diagram", { cls: line.cls, stops: stops.map(s => ({ key: s.key, lon: s.lon, lat: s.lat })) });
-    const get = ks => ks.map(k => registry.get(k)).filter(l => l && l !== line && this.enabled.has(l.cls));
+    // One badge per line name (feeds list some lines twice, in different colours), never the line itself.
+    const get = ks => {
+      const seen = new Set(), out = [];
+      for (const l of ks.map(k => registry.get(k))) {
+        if (!l || !this.enabled.has(l.cls) || (l.cls === line.cls && l.name === line.name)) continue;
+        // On a rail, metro or tram line, the changes worth showing are to other rail, metro, tram and ferry lines.
+        if (line.cls !== "bus" && l.cls === "bus") continue;
+        const k = l.cls + "|" + l.name;
+        if (!seen.has(k)) { seen.add(k); out.push(l); }
+      }
+      return out;
+    };
     return { meet: r.meet.map(get), along: r.along.map(get) };
   }
   async linesInView() {
@@ -238,6 +249,11 @@ export class Network {
     return keys.map(k => registry.get(k)).filter(Boolean);
   }
   group(key) { return this.ask("group", { key }); }
+  /** Every loaded variant of a line, as station sequences, and whether each runs now. */
+  variants(key) { return this.ask("variants", { key }); }
+  gids(keys) { return this.ask("gids", { keys }); }
+  /** The line as drawn on the map right now (pairs of points), for highlighting it. */
+  shape(key) { return this.ask("shape", { key }); }
   /** Line keys from a map feature's "lines" property. */
   keysOf(prop) { return String(prop || "").split("\n").filter(Boolean).map(id => this.byId.get(+id)).filter(Boolean); }
 }

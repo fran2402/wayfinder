@@ -355,3 +355,16 @@ body[data-sheet="full"] .mapctl { opacity: 0; pointer-events: none; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The whole line (after the reference strip map): tracks on the left, names well in, badges right. */
+.ldiagram { position: relative; margin-top: 2px; }
+.ldiagram .track { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; min-height: 22px; padding-left: var(--name-x); padding-right: 2px; border-radius: 8px; cursor: pointer; }
+.lrow:hover { background: var(--sunk); }
+.lrow.here { background: var(--accent-soft); }
+.lrow.off .nm { color: var(--muted); }
+.lrow .nm { font-size: 14px; font-weight: 500; line-height: 1.25; text-wrap: balance; }
+.lrow .bd { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: 104px; }
+.lrow .more { height: 17px; padding: 0 3px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.badge.dot { height: 17px; min-width: 17px; padding: 1px 4px 0; font-size: 10.5px; border-radius: 9px; font-weight: 850; letter-spacing: -.02em; }
+.badge.dot.train { border-radius: 3px; }

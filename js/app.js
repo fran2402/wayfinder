@@ -4,7 +4,7 @@
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
 import { Network } from "./network.js";
-import { diagramModel, diagramHtml, drawDiagram, summaryHtml } from "./diagram.js";
+import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
 import { CLASSES, badge, classLabel, classOf, colourOf, textOn, compareLines, lineOfStopTime, registry } from "./lines.js";
 import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce, store } from "./util.js";
 
@@ -348,19 +348,17 @@ VIEWS.line = {
     const l = registry.get(s.key);
     if (!l) return failed("unknown line");
     const d = s.data;
-    const title = d ? `To ${d.stops[d.stops.length - 1].name}` : l.longName || `${classLabel(l.cls)} ${l.name}`;
-    const head = `<header class="lhead">${badge(l, "big")}<div><b>${esc(title)}</b><small>${esc([classLabel(l.cls), d && `${d.stops.length} stops`, l.agency].filter(Boolean).join(" · "))}</small></div>
+    const ends = d?.lay ? [...new Set(d.lay.ends.map(e => d.lay.rows[e.row].name))] : [];
+    const title = l.longName || (ends.length ? ends.slice(0, 2).join(" – ") : `${classLabel(l.cls)} ${l.name}`);
+    const head = `<header class="lhead">${badge(l, "big")}<div><b>${esc(title)}</b><small>${esc([classLabel(l.cls), d?.lay && `${d.lay.rows.length} stations`, l.agency].filter(Boolean).join(" · "))}</small></div>
       <button class="icon-btn filled" data-act="back" aria-label="Close">${icon("close", "s")}</button></header>`;
     if (s.dataErr) return head + failed(s.dataErr, "reload-line");
-    if (!d || !s.model) return head + loading(6);
-    const first = d.stops[0], last = d.stops[d.stops.length - 1];
-    return head + `<div class="seg" role="group" aria-label="Direction">
-        <button aria-pressed="true">To ${esc(last.name)}</button>
-        <button data-act="reverse" aria-pressed="false"${s["rev$"] ? " disabled" : ""}>${s["rev$"] ? "Finding…" : `To ${esc(first.name)}`}</button></div>
-      ${diagramHtml(l, d.stops, s.model, { expanded: s.expanded, current: s.at, rightLabel: d.timed ? (d.live ? "live trip" : "next trip") : "" })}
-      ${d.timed ? summaryHtml(d.stops, s.back) : `<p class="pad">Nothing of this line is running in the next hours.</p>`}`;
+    if (!d) return head + loading(8);
+    if (!d.lay) return head + `<p class="pad">Nothing of this line is running right now.</p>`;
+    return head + lineDiagramHtml(l, d.lay, d.meet, { expanded: s.expanded, here: s.at, onTrip: d.trip ? new Set(d.trip.stops.map(x => x.key)) : null })
+      + (d.trip ? `<p class="sec">${d.trip.live ? "Live trip" : "Next trip"} · ${esc(d.trip.stops[0].name)} ${clock(d.trip.stops[0].time, d.trip.stops[0].tz)} → ${esc(d.trip.stops[d.trip.stops.length - 1].name)} ${clock(d.trip.stops[d.trip.stops.length - 1].time, d.trip.stops[0].tz)}</p>${summaryHtml(d.trip.stops, s.back)}` : "");
   },
-  after(s) { if (s.data && s.model) requestAnimationFrame(() => drawDiagram(registry.get(s.key), s.data.stops, s.model)); },
+  after(s) { if (s.data?.lay) requestAnimationFrame(() => drawLineDiagram(registry.get(s.key), s.data.lay, s.data.meet)); },
 };
 
 async function tripData(tripId) {
@@ -371,36 +369,71 @@ async function tripData(tripId) {
   stops.forEach(x => { x.past = x.time && Date.parse(x.time) < now - 30000; x.rt = leg.realTime; x.late = x.sched && x.time && Date.parse(x.time) - Date.parse(x.sched) >= 60000; });
   return { stops, shape: shape(leg.legGeometry), timed: true, live: leg.realTime, tripId };
 }
+const routeDetails = new Map();
+const routeDetail = idx => { if (!routeDetails.has(idx)) routeDetails.set(idx, api.routeDetails(idx).catch(e => { routeDetails.delete(idx); throw e; })); return routeDetails.get(idx); };
+/** Run fn over items, at most n at a time; failures become null. */
+async function pool(items, n, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; try { out[k] = await fn(items[k]); } catch { out[k] = null; } } }));
+  return out;
+}
+/** A shape without its broken bits: a straight jump of over `max` metres between two points is not a road. */
+function splitJumps(coords, max) {
+  const out = [[]];
+  for (const c of coords) { const cur = out[out.length - 1], p = cur[cur.length - 1]; if (p && metres(p, c) > max) out.push([c]); else cur.push(c); }
+  return out.filter(x => x.length > 1);
+}
+
 function loadLine(s) {
   s.expanded = s.expanded || new Set();
   load(s, "data", async () => {
     const l = registry.get(s.key);
-    let d = null;
-    if (s.tripId) d = await tripData(s.tripId);
-    else {
-      // From the map: the line's route, then its next trip from the first stop.
-      const rd = await api.routeDetails([...l.routes][0]);
-      const r = rd.routes[0];
-      const rstops = [r.segments[0].from, ...r.segments.map(x => x.to)].map(i => rd.stops[i]);
-      try {
-        const dep = await api.departures({ stopId: rstops[0].stopId, n: 80 });
-        const st = dep.stopTimes.find(x => lineOfStopTime(x) === l);
-        if (st) { s.tripId = st.tripId; d = await tripData(st.tripId); }
-      } catch { /* stops without times */ }
-      if (!d) d = { stops: rstops.map(stopOf), shape: r.segments.flatMap(x => shape(rd.polylines[x.polyline]?.polyline)), timed: false };
+    // The whole line: every variant the map has met, the running ones when anything runs.
+    // Tiles only carry the part of a route inside them, so each distinct variant is fetched whole.
+    const all = await net.variants(l.key);
+    let cand = all.filter(v => v.run);
+    if (!cand.length) cand = all;
+    const distinct = new Map();
+    for (const v of cand) { const k = v.n + "|" + v.sig; if (!distinct.has(k)) distinct.set(k, v.idx); }
+    const seqs = (await pool([...distinct.values()].slice(0, 40), 6, async idx => {
+      const rd = await routeDetail(idx), r = rd.routes[0];
+      return r?.segments.length ? [r.segments[0].from, ...r.segments.map(x => x.to)].map(i => rd.stops[i]) : null;
+    })).filter(Boolean);
+    let vs = [];
+    if (seqs.length) {
+      const keys = [...new Set(seqs.flat().map(p => p.parentId || p.stopId))];
+      const g = await net.gids(keys), gm = new Map(keys.map((k, i) => [k, g[i]]));
+      vs = seqs.map(sq => ({ stops: sq.map(p => { const k = p.parentId || p.stopId, x = gm.get(k); return { key: x?.gid || k, sk: k, name: x?.name || p.name, lon: p.lon, lat: p.lat }; }) }));
     }
-    s.model = await diagramModel(l, d.stops, net);
+    let trip = null;
+    if (s.tripId) trip = await tripData(s.tripId).catch(() => null);
+    if (!vs.length && trip) vs = [{ stops: trip.stops.map(x => ({ key: x.key, sk: x.key, name: x.name, lon: x.lon, lat: x.lat })) }];
+    const lay = vs.length ? layoutLine(vs) : null;
+    const meet = lay ? await meetings(l, lay, net) : [];
+    // A trip for the times underneath: the one tapped, else the next one from the first station.
+    if (!trip && lay) {
+      try {
+        const dep = await api.departures({ stopId: lay.rows[0].sk, n: 80 });
+        const st = dep.stopTimes.find(x => lineOfStopTime(x) === l);
+        if (st) trip = await tripData(st.tripId);
+      } catch { /* no times */ }
+    }
+    const d = { lay, meet, trip };
     s.back = null;
-    if (d.timed) findBack(l, d).then(async st => {
+    if (trip) findBack(l, trip).then(async st => {
       if (!st || s.data !== d) return;
-      const b = await tripData(st.tripId), bs = b.stops;
+      const bs = (await tripData(st.tripId)).stops;
       const journey = (Date.parse(bs[bs.length - 1].arr || bs[bs.length - 1].time) - Date.parse(bs[0].dep || bs[0].time)) / 1000;
-      const turn = Math.max(0, Math.min(3600, (Date.parse(bs[0].dep || bs[0].time) - Date.parse(d.stops[d.stops.length - 1].arr || d.stops[d.stops.length - 1].time)) / 1000));
+      const turn = Math.max(0, Math.min(3600, (Date.parse(bs[0].dep || bs[0].time) - Date.parse(trip.stops[trip.stops.length - 1].arr || trip.stops[trip.stops.length - 1].time)) / 1000));
       if (journey > 0) { s.back = { journey, turn }; refresh(s); }
     }).catch(() => {});
-    const coords = d.shape.length > 1 ? d.shape : d.stops.map(x => [x.lon, x.lat]);
-    setOverlay("focus", { type: "FeatureCollection", features: [{ type: "Feature", properties: { c: colourOf(l) }, geometry: { type: "LineString", coordinates: coords } }] });
-    frame(coords, 15.5);
+    // The map: the whole line as drawn, else the trip's own shape.
+    const pairs = await net.shape(l.key);
+    const max = l.cls === "train" ? 8000 : 1200;
+    const lines = pairs.length ? pairs : trip ? splitJumps(trip.shape, max) : [];
+    setOverlay("focus", { type: "FeatureCollection", features: [{ type: "Feature", properties: { c: colourOf(l) }, geometry: { type: "MultiLineString", coordinates: lines } }] });
+    const pts = lay ? lay.rows.map(x => [x.lon, x.lat]) : lines.flat();
+    if (pts.length) frame(pts, 15.5);
     return d;
   });
 }
@@ -410,17 +443,6 @@ async function findBack(l, d) {
   const dep = await api.departures({ stopId: last.key, n: 100, time: last.arr || last.time });
   return dep.stopTimes.find(x => lineOfStopTime(x) === l && (x.tripTo?.name === firstName || x.headsign === firstName))
     || dep.stopTimes.find(x => lineOfStopTime(x) === l && x.tripTo?.name !== last.name);
-}
-async function reverseLine(s) {
-  const d = s.data, l = registry.get(s.key);
-  if (!d || s["rev$"]) return;
-  s["rev$"] = true; refresh(s);
-  try {
-    const st = await findBack(l, d);
-    if (!st) throw new Error("no trip back soon");
-    Object.assign(s, { tripId: st.tripId, data: null, model: null, at: null, back: null, "rev$": false });
-    loadLine(s);
-  } catch (e) { s["rev$"] = false; toast(`Couldn't find the other direction (${e.message}).`); refresh(s); }
 }
 
 /* ============================== Lines under a tap ============================== */
@@ -546,7 +568,7 @@ function itinFeatures(it) {
     if (coords.length < 2) continue;
     if (l.mode === "WALK" || l.mode === "BIKE") { f.push({ type: "Feature", properties: { k: l.mode === "WALK" ? "walk" : "bike" }, geometry: { type: "LineString", coordinates: coords } }); continue; }
     const c = colourOf(lineOfStopTime(l));
-    f.push({ type: "Feature", properties: { k: "ride", c }, geometry: { type: "LineString", coordinates: coords } });
+    f.push({ type: "Feature", properties: { k: "ride", c }, geometry: { type: "MultiLineString", coordinates: splitJumps(coords, classOf(l.mode) === "train" ? 8000 : 1200) } });
     for (const p of l.intermediateStops || []) f.push({ type: "Feature", properties: { k: "stop", end: 0, c }, geometry: { type: "Point", coordinates: [p.lon, p.lat] } });
     for (const p of [l.from, l.to]) f.push({ type: "Feature", properties: { k: "stop", end: 1, c, name: p.name }, geometry: { type: "Point", coordinates: [p.lon, p.lat] } });
   }
@@ -689,7 +711,6 @@ document.addEventListener("click", async e => {
       } catch (err) { toast(err.message); }
       return;
     }
-    case "reverse": return reverseLine(s);
     case "dir-stop": T.to = { name: s.name, sub: "Stop", lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "trip" });
     case "dir-place": T.to = { name: s.name, sub: s.sub, lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "trip" });
     case "save-place": {
@@ -751,7 +772,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => { if (e.target.id === "whenat" && T.time) { T.time = new Date(e.target.value).toISOString(); refresh(screen()); } });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && stack.length > 1) { e.preventDefault(); back(); }
-  const row = e.target.closest?.(".srow");
+  const row = e.target.closest?.(".srow, .lrow");
   if (row && (e.key === "Enter" || e.key === " ") && e.target === row) { e.preventDefault(); row.click(); }
   if (e.key === "Enter" && e.target.id === "q") { const s = cur(); if (s.results?.[0]) chooseResult(s.results[0], s); }
 });
@@ -760,7 +781,7 @@ document.addEventListener("keydown", e => {
 net.on(debounce(() => {
   const s = screen();
   if (PAGES.has(cur().t)) return;
-  if (s.t === "line" && s.data && s.model) diagramModel(registry.get(s.key), s.data.stops, net).then(m => { s.model = m; refresh(s); });
+  if (s.t === "line" && s.data?.lay) meetings(registry.get(s.key), s.data.lay, net).then(m => { s.data.meet = m; refresh(s); });
   else if (s.t === "explore" && net.seen.size !== s.seenCount) { s.seenCount = net.seen.size; refresh(s); }
 }, 900));
 
