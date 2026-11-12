@@ -3,15 +3,18 @@ name: Publish site
 # The site is plain HTML, CSS and JavaScript, published as it is — plus two data files made here:
 #   data/ski.pmtiles — the world's ski runs, lifts and ski areas (OpenSkiMap's daily OpenStreetMap
 #                      extract; tools/build-ski.sh). Quick: rebuilt once a week, reused in between.
-#   data/sea.pmtiles — the world's sea marks (OpenStreetMap through Overpass; tools/build-sea.sh).
-#                      Slow: rebuilt by the weekly run (or by hand: Actions → Publish site → Run workflow);
-#                      every other publish reuses the latest one.
+#   data/sea.pmtiles — the world's sea marks, made by the separate "Build sea marks" workflow
+#                      (sea.yml, nightly, a piece at a time); every publish uses its latest file and
+#                      a publish follows each sea build.
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "17 3 * * 1" # Mondays: fresh ski and sea data
+    - cron: "17 3 * * 1" # Mondays: fresh ski data
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Build sea marks"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -20,12 +23,12 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -46,25 +49,12 @@ jobs:
         if: steps.ski.outputs.cache-hit != 'true'
         run: tools/build-ski.sh /tmp/ski data/ski.pmtiles
 
-      # Sea marks: the latest built file, rebuilt on the weekly run, by hand, or if there's none yet.
-      - id: sea
-        uses: actions/cache/restore@v4
+      # Sea marks: the latest file made by the "Build sea marks" workflow (sea.yml), if there is one yet.
+      - uses: actions/cache/restore@v4
         with:
           path: data/sea.pmtiles
-          key: sea-${{ github.run_id }}
-          restore-keys: sea-
-      - name: Build the sea tiles
-        id: seabuild
-        if: github.event_name != 'push' || steps.sea.outputs.cache-matched-key == ''
-        continue-on-error: true
-        timeout-minutes: 240
-        run: tools/build-sea.sh /tmp/sea data/sea.pmtiles
-      - name: Keep the new sea tiles
-        if: steps.seabuild.outcome == 'success'
-        uses: actions/cache/save@v4
-        with:
-          path: data/sea.pmtiles
-          key: sea-${{ github.run_id }}
+          key: seatiles-${{ github.run_id }}
+          restore-keys: seatiles-
 
       # Pages has to be switched on once by hand: Settings → Pages → Source: "GitHub Actions".
       - uses: actions/configure-pages@v5
