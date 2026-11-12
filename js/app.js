@@ -18,6 +18,7 @@ import { preloadStreetIcons } from "./streets.js";
 import { preloadSkiIcons, SKI_LAYER_IDS } from "./ski.js";
 import { attach as attachIcons } from "./icons.js";
 import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
+import { preloadHikeIcons, HIKE_LAYER_IDS } from "./hiking.js";
 import { preloadPlaceIcons, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
@@ -27,7 +28,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, flights: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, flights: true, hiking: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -51,14 +52,14 @@ map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribut
 map.on("styleimagemissing", e => {
   if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
   if (e.id.startsWith("sm-")) return seaIcon(e.id);
-  if (/^(rwy-|air-|shield-|road-|ski-|pl-)/.test(e.id)) return; // drawn as SVG (icons.js), on their way
+  if (/^(rwy-|air-|shield-|road-|ski-|pl-|hike-|plane)/.test(e.id) || e.id === "peak" || e.id === "volcano") return; // drawn as SVG (icons.js), on their way
   // A place kind the base map's sprite has no icon for: a small dot instead.
   const c = document.createElement("canvas"); c.width = c.height = 24; const g = c.getContext("2d");
   g.fillStyle = "#fff"; g.beginPath(); g.arc(12, 12, 8, 0, 7); g.fill(); g.fillStyle = "#80868B"; g.beginPath(); g.arc(12, 12, 5.5, 0, 7); g.fill();
   map.addImage(e.id, { width: 24, height: 24, data: g.getImageData(0, 0, 24, 24).data }, { pixelRatio: 2 });
 });
 attachIcons(map);
-preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); preloadPlaceIcons(); preloadPlaneIcons();
+preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); preloadPlaceIcons(); preloadPlaneIcons(); preloadHikeIcons();
 
 const net = new Network(map);
 const sea = new SeaArcs(map);
@@ -873,6 +874,7 @@ function applyLayers() {
   for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
+  for (const id of HIKE_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.hiking));
   for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
   for (const id of ["planes", "plane-trail"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.flights || !!planes.tracked));
   planes.on = settings.flights; planes.render(); if (settings.flights) planes.update();
@@ -894,6 +896,7 @@ function renderLayers() {
     ${sw(settings.places, 'data-layer="places"', "Places", "Shops, food, culture, services", "pin")}
     ${sw(settings.sea, 'data-layer="sea"', "Sea", "Sea marks, ferries, marinas, lighthouses, Blue Flags", "ferry")}
     ${sw(settings.ski, 'data-layer="ski"', "Skiing", "Ski resorts, runs by difficulty, lifts, trails", "terrain")}
+    ${sw(settings.hiking, 'data-layer="hiking"', "Hiking", "Marked walking and hiking routes, trails, peaks", "walk")}
     ${sw(settings.flights, 'data-layer="flights"', "Flights", "Aircraft in the air now; tap one to track it", "plane")}
     ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
     ${soonRow("traffic", "Traffic", "Road speeds and closures")}
@@ -1161,6 +1164,7 @@ document.addEventListener("click", async e => {
   if (d.ltab) { s.ltab = d.ltab; return refresh(s); }
   if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "hiking") { settings.hiking = !settings.hiking; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "flights") { settings.flights = !settings.flights; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "ski") { settings.ski = !settings.ski; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "sea") { settings.sea = !settings.sea; saveSettings(); applyLayers(); return renderLayers(); }

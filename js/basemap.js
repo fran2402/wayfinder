@@ -8,6 +8,7 @@ import { streetLayers, streetLabels } from "./streets.js";
 import { skiSources, skiLayers } from "./ski.js";
 import { placeIcon, placeTextColour, HIDDEN } from "./places.js";
 import { planeSources, planeLayers } from "./flights.js";
+import { hikeLayers } from "./hiking.js";
 export { stopIcon } from "./network.js";
 
 /* The map palette:
@@ -29,7 +30,7 @@ export const THEMES = {
     // Height, from the coast to the peaks: lowland greens, hill tans, mountain browns, rock grey, snow.
     relief: [-50, "#D8EDCB", 0, "#D8EDCB", 100, "#E0F0CC", 250, "#EAF1C8", 500, "#F1EDC0", 800, "#EEDFAE", 1200, "#E4CB98", 1700, "#D3B486", 2300, "#C3A68E", 2900, "#C9BCB3", 3500, "#E4E0DD", 4200, "#FAFAFA"],
     // Crops by the colour of their leaves.
-    skiArea: "#EEF4FC", ferry: "#1A73E8", seaBorder: "#669DF6", coast: "#8AB4F8", seaLabel: "#185ABC",
+    trail: "#8D5B3B", footway: "#9AA0A6", track: "#A1887F", skiArea: "#EEF4FC", ferry: "#1A73E8", seaBorder: "#669DF6", coast: "#8AB4F8", seaLabel: "#185ABC",
     edu: "#FEF7E0", eduLine: "#F0D27A", cemetery: "#D9E5D6", cemLine: "#9DB09A", military: "#FCE8E6", milLine: "#D93025", pitch: "#B7DFB9", pitchLine: "#FFFFFF",
     pool: "#8FDCF5", poolLine: "#3BA5D8", npLine: "#1E8E3E", reserveLine: "#4CAF6A", beachLine: "#4A90E2", apron: "#DDE0E4", runway: "#8E9399", runwayLine: "#FFFFFF",
     zoo: "#E6EFD3", zooLine: "#98B56F", border: "#8E7CA8", borderHalo: "#D7CCE6", region: "#A99BBF", pier: "#F8F9FA", dam: "#C4C7CC",
@@ -47,7 +48,7 @@ export const THEMES = {
     label: "#E8EAED", labelMuted: "#9AA0A6", halo: "#1F2124", poi: "#BDC1C6",
     casing: "#1F2124", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#81C995",
     relief: [-50, "#1C2A1F", 0, "#1C2A1F", 100, "#1F2C1F", 250, "#252D1F", 500, "#2B2D20", 800, "#302B20", 1200, "#352B21", 1700, "#382C24", 2300, "#3A302B", 2900, "#3E3836", 3500, "#4A4645", 4200, "#5C5A5A"],
-    skiArea: "#25303D", ferry: "#8AB4F8", seaBorder: "#4A7CC7", coast: "#2B5C93", seaLabel: "#8AB4F8",
+    trail: "#C49A7A", footway: "#6E737A", track: "#8D7B70", skiArea: "#25303D", ferry: "#8AB4F8", seaBorder: "#4A7CC7", coast: "#2B5C93", seaLabel: "#8AB4F8",
     edu: "#2E2B20", eduLine: "#6B5B2A", cemetery: "#24302A", cemLine: "#4E6152", military: "#3A2424", milLine: "#E57373", pitch: "#25402B", pitchLine: "#6C8F72",
     pool: "#1B5A75", poolLine: "#3D8FB8", npLine: "#5FBF7A", reserveLine: "#4E9E68", beachLine: "#5B8FD0", apron: "#2C2F34", runway: "#45494F", runwayLine: "#C4C7CC",
     zoo: "#26301F", zooLine: "#5C7044", border: "#9C8BB8", borderHalo: "#3A3248", region: "#7A6E90", pier: "#2A2D31", dam: "#55595E",
@@ -61,7 +62,7 @@ const cls = (...v) => ["match", ["get", "class"], v, true, false];
 
 export function buildStyle(theme) {
   const t = THEMES[theme];
-  const net = networkLayers(t), sea = seaLayers(t), air = airLayers(t), streets = streetLayers(t), ski = skiLayers(t);
+  const net = networkLayers(t), sea = seaLayers(t), air = airLayers(t), streets = streetLayers(t), ski = skiLayers(t), hike = hikeLayers(t);
   const notTunnel = ["!=", ["get", "brunnel"], "tunnel"];
   return {
     version: 8,
@@ -171,8 +172,9 @@ export function buildStyle(theme) {
       ...streets.tunnels,
       { id: "building", type: "fill", source: "omt", "source-layer": "building", minzoom: 14,
         paint: { "fill-color": t.building, "fill-outline-color": t.buildingLine, "fill-opacity": z(14, 0, 15, 1) } },
-      { id: "path", type: "line", source: "omt", "source-layer": "transportation", minzoom: 15, filter: ["all", cls("path", "track"), notTunnel, ["!=", ["get", "subclass"], "pedestrian"]],
-        paint: { "line-color": t.path, "line-width": z(15, 0.8, 18, 2), "line-dasharray": [2, 1.5] } },
+      // Hiking routes as coloured bands, then the paths by kind.
+      ...hike.bands,
+      ...hike.paths,
       ...streets.roads,
       { id: "rail-tunnel", type: "line", source: "omt", "source-layer": "transportation", minzoom: 12, filter: ["all", cls("rail", "transit"), ["==", ["get", "brunnel"], "tunnel"], ["!", ["has", "service"]]],
         paint: { "line-color": t.rail, "line-width": z(12, 0.6, 16, 1.4), "line-opacity": 0.6, "line-dasharray": [3, 2] } },
@@ -237,6 +239,7 @@ export function buildStyle(theme) {
         paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
       ...air.labels,
       ...ski.labels,
+      ...hike.labels,
       ...sea.over,
       ...net.labels,
       ...planeLayers(t),
