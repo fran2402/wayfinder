@@ -62,9 +62,9 @@ export function buildStyle(theme) {
       // Elevation (Terrarium tiles, AWS Open Data): drives the height colours and the hill shading.
       dem: { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 13,
         attribution: 'Terrain <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen / AWS</a>' },
-      // The same tiles carry the sea floor only up to zoom 8 (deeper zooms say 0 at sea), so depth always uses those, enlarged.
-      bathy: { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 8 },
-      omt: { type: "vector", url: "https://tiles.openfreemap.org/planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
+      // Sea depth, made in tile-worker.js: the sea floor (only in the zoom ≤ 8 elevation tiles) spline-interpolated and coloured.
+      depth: { type: "raster", tiles: [`wfdepth://${theme}/{z}/{x}/{y}`], tileSize: 256, maxzoom: 14 },
+      omt: { type: "vector", url: "wfomt://planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
     layers: [
@@ -95,7 +95,7 @@ export function buildStyle(theme) {
       { id: "landuse-medical", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 12, filter: cls("hospital"), paint: { "fill-color": t.medical } },
       { id: "water", type: "fill", source: "omt", "source-layer": "water", filter: ["!=", ["get", "brunnel"], "tunnel"], paint: { "fill-color": t.water } },
       // How deep the sea is (the elevation tiles carry the sea floor too).
-      { id: "depth", type: "color-relief", source: "bathy", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.depth], "color-relief-opacity": 1 } },
+      { id: "depth", type: "raster", source: "depth", paint: { "raster-resampling": "linear", "raster-fade-duration": 150 } },
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: notTunnel,
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },

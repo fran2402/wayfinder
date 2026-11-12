@@ -10,6 +10,7 @@
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
+import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
 import { CLASSES, badge, classLabel, classOf, colourOf, textOn, compareLines, lineOfStopTime, registry } from "./lines.js";
