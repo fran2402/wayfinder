@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The world's sea marks from OpenStreetMap (Overpass), read with the map's own code (js/seamarks-core.js).
 //
-//   node tools/build-sea.mjs crawl <cells dir> [minutes]   — fetch areas, oldest first, for at most [minutes]
+//   node tools/build-sea.mjs qlever <cells dir>              — the whole world from QLever, in two queries (used)
+//   node tools/build-sea.mjs crawl <cells dir> [minutes]   — fetch areas from Overpass, oldest first (fallback)
 //   node tools/build-sea.mjs join <cells dir> <out dir>     — all saved areas → <out>/marks.ndjson, lines.ndjson
 //   node tools/build-sea.mjs files <out dir> a.json …       — saved Overpass answers instead (for testing)
 //
@@ -20,6 +21,9 @@ const SERVERS = ["https://overpass-api.de/api/interpreter", "https://maps.mail.r
   "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const STEP = 10;
+const QLEVER = "https://qlever.dev/api/osm-planet";
+const QPRE = "PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>\nPREFIX geo: <http://www.opengis.net/ont/geosparql#>\n";
+const QSEL = `{ ?o osmkey:seamark:type ?t } UNION { ?o osmkey:man_made "lighthouse" } UNION { ?o osmkey:blue_flag "yes" }`;
 
 const query = ([s, w, n, e]) => {
   const bb = `(${s},${w},${n},${e})`;
@@ -94,6 +98,59 @@ if (mode === "crawl") {
   }
   const have = cells.filter(c => fs.existsSync(c.f)).length;
   console.log(`this run: ${ok} cells fetched, ${busy} skipped; ${have} of ${cells.length} cells saved in all`);
+} else if (mode === "qlever") {
+  // The whole world in two queries to QLever's OpenStreetMap planet endpoint (University of Freiburg):
+  // every sea mark's shape, and its tags. Written as one file of Overpass-style elements for "join".
+  const [dir, gFile, tFile] = args;
+  fs.mkdirSync(dir, { recursive: true });
+  const fetchTsv = async (q, file) => {
+    if (file) return fs.readFileSync(file, "utf8");
+    for (let i = 0; i < 4; i++) {
+      try {
+        const res = await fetch(QLEVER, { method: "POST", body: new URLSearchParams({ query: q }), headers: { Accept: "text/tab-separated-values", "User-Agent": "Wayfinder sea-mark build" }, signal: AbortSignal.timeout(900000) });
+        if (res.ok) return await res.text();
+        console.log(`QLever ${res.status}, again in a minute`);
+      } catch (e) { console.log(`QLever: ${e.message}, again in a minute`); }
+      await sleep(60000);
+    }
+    throw new Error("QLever didn't answer");
+  };
+  const t0 = Date.now();
+  const geomTsv = await fetchTsv(`${QPRE}SELECT DISTINCT ?o ?wkt WHERE { ${QSEL} ?o geo:hasGeometry/geo:asWKT ?wkt }`, gFile);
+  console.log(`shapes: ${(geomTsv.length / 1e6).toFixed(0)} MB in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const t1 = Date.now();
+  const tagTsv = await fetchTsv(`${QPRE}SELECT DISTINCT ?o ?k ?v WHERE { ${QSEL} ?o ?k ?v . FILTER(STRSTARTS(STR(?k), "https://www.openstreetmap.org/wiki/Key:seamark") || ?k IN (osmkey:name, osmkey:name:en, osmkey:man_made, osmkey:blue_flag, osmkey:leisure)) }`, tFile);
+  console.log(`tags: ${(tagTsv.length / 1e6).toFixed(0)} MB in ${((Date.now() - t1) / 1000).toFixed(0)} s`);
+  const els = new Map();
+  const el = iri => {
+    let e = els.get(iri);
+    if (!e) { const m = /openstreetmap\.org\/(node|way|relation)\/(\d+)/.exec(iri); if (!m) return null; e = { type: m[1], id: +m[2], tags: {} }; els.set(iri, e); }
+    return e;
+  };
+  const lit = v => { const m = /^"((?:[^"\\]|\\.)*)"/.exec(v); return m ? m[1].replace(/\\(.)/g, (_, c) => ({ n: "\n", t: "\t", r: "" }[c] ?? c)) : v.replace(/^<|>$/g, ""); };
+  for (const line of tagTsv.split("\n").slice(1)) {
+    const [o, k, v] = line.split("\t");
+    if (!v) continue;
+    const e = el(o); if (!e) continue;
+    e.tags[k.replace(/^<https:\/\/www\.openstreetmap\.org\/wiki\/Key:|>$/g, "")] = lit(v);
+  }
+  const pairs = s => s.trim().split(/\s*,\s*/).map(p => { const [x, y] = p.replace(/[()]/g, "").trim().split(/\s+/).map(Number); return { lon: x, lat: y }; });
+  for (const line of geomTsv.split("\n").slice(1)) {
+    const tab = line.indexOf("\t"); if (tab < 0) continue;
+    const e = el(line.slice(0, tab)); if (!e) continue;
+    const wkt = lit(line.slice(tab + 1));
+    const kind = /^\s*(\w+)/.exec(wkt)?.[1];
+    if (kind === "POINT") { const [p] = pairs(wkt.slice(wkt.indexOf("("))); if (e.type === "node") { e.lat = p.lat; e.lon = p.lon; } else e.center = p; }
+    else if (kind === "LINESTRING") e.geometry = pairs(wkt.slice(wkt.indexOf("(")));
+    else if (kind === "POLYGON" || kind === "MULTIPOLYGON") {
+      // The outer ring of the (first) polygon: areas are drawn by their outline.
+      const ring = /\(\(+([^()]*)\)/.exec(wkt)?.[1];
+      if (ring) { e.geometry = pairs(ring); if (e.type === "relation") { const g = e.geometry; e.center = { lon: g.reduce((a, p) => a + p.lon, 0) / g.length, lat: g.reduce((a, p) => a + p.lat, 0) / g.length }; } }
+    }
+  }
+  const list = [...els.values()].filter(e => e.lat != null || e.center || e.geometry);
+  fs.writeFileSync(path.join(dir, "world.json"), JSON.stringify(list));
+  console.log(`${list.length} sea marks with their shapes and tags`);
 } else if (mode === "join" || mode === "files") {
   const [a, b, ...files] = args, out = mode === "join" ? b : a;
   const inputs = mode === "join" ? fs.readdirSync(a).filter(f => f.endsWith(".json")).map(f => path.join(a, f)) : [b, ...files].filter(Boolean);

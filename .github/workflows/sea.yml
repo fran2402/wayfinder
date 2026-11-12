@@ -1,9 +1,8 @@
 name: Build sea marks
 
-# The world's sea marks from OpenStreetMap, gathered a piece at a time: each run fetches the 10° cells
-# that are missing or oldest for up to 2½ hours (the public Overpass servers are often busy), keeps
-# them for the next run, and makes data/sea.pmtiles from everything gathered so far. Publishing the
-# site picks that file up (see pages.yml) and runs as soon as this finishes.
+# The world's sea marks from OpenStreetMap, in two queries to QLever's OpenStreetMap planet endpoint
+# (University of Freiburg; a few minutes), made into data/sea.pmtiles. Publishing the site picks that
+# file up (see pages.yml) and runs as soon as this finishes.
 on:
   schedule:
     - cron: "41 1 * * *" # nightly
@@ -19,25 +18,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install tippecanoe
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tippecanoe
-      - name: Saved cells
-        uses: actions/cache/restore@v4
-        with:
-          path: sea-cells
-          key: sea-cells-${{ github.run_id }}
-          restore-keys: sea-cells-
-      - name: Fetch more cells
-        run: node tools/build-sea.mjs crawl sea-cells 150
-      - name: Keep the cells
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: sea-cells
-          key: sea-cells-${{ github.run_id }}
+      - name: Fetch the world's sea marks
+        run: node --max-old-space-size=6000 tools/build-sea.mjs qlever sea-cells
       - name: Build the tiles
         run: tools/build-sea.sh sea-cells data/sea.pmtiles
       - name: Keep the tiles

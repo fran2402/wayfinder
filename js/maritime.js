@@ -61,7 +61,7 @@ export class SeaArcs {
 /* ============================== Layers ============================== */
 
 export const seaSources = () => ({
-  sea: { type: "vector", url: "pmtiles://" + new URL("data/sea.pmtiles", location.href).href, maxzoom: 14,
+  sea: { type: "vector", url: "pmtiles://" + new URL("data/sea.pmtiles", location.href).href, maxzoom: 13,
     attribution: '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a> tagging' },
   "sea-arcs": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
 });
