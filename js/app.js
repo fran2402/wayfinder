@@ -19,6 +19,7 @@ import { preloadSkiIcons, SKI_LAYER_IDS } from "./ski.js";
 import { attach as attachIcons } from "./icons.js";
 import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
 import { preloadHikeIcons, HIKE_LAYER_IDS } from "./hiking.js";
+import { vehicleIcon } from "./vehicles.js";
 import { preloadPlaceIcons, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
@@ -52,6 +53,7 @@ map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribut
 map.on("styleimagemissing", e => {
   if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
   if (e.id.startsWith("sm-")) return seaIcon(e.id);
+  if (vehicleIcon(e.id)) return;
   if (/^(rwy-|air-|shield-|road-|ski-|pl-|hike-|plane)/.test(e.id) || e.id === "peak" || e.id === "volcano") return; // drawn as SVG (icons.js), on their way
   // A place kind the base map's sprite has no icon for: a small dot instead.
   const c = document.createElement("canvas"); c.width = c.height = 24; const g = c.getContext("2d");
@@ -72,6 +74,10 @@ const EMPTY = { type: "FeatureCollection", features: [] };
 const overlay = { focus: EMPTY, trip: EMPTY };
 function setOverlay(name, fc) { overlay[name] = fc; map.getSource(name)?.setData(fc); }
 
+// Ask for the transit lines right away, not once the whole map style has loaded: each area is drawn
+// as soon as it arrives (the worker builds it meanwhile; it's handed over once the map is ready).
+net.update();
+map.on("style.load", () => net.render(true));
 map.on("load", () => net.update());
 // The view goes into the address (for links), but going back through the history never moves the map:
 // closing a panel leaves the map where you are now.
@@ -867,7 +873,7 @@ VIEWS.menu = {
 
 /* ============================== Layers ============================== */
 
-const NET_LAYERS = ["net-casing", "net-lines", "net-rail-dash", "stations", "stations-far", "station-links", "station-links-casing", "station-labels", "vehicles", "vehicle-labels"];
+const NET_LAYERS = ["net-casing", "net-lines", "net-rail-dash", "stations", "stations-far", "station-links", "station-links-casing", "station-labels", "vehicles", "vehicle-glyphs", "vehicle-labels"];
 /** Show or hide what the layers sheet controls. */
 function applyLayers() {
   const vis = on => on ? "visible" : "none";

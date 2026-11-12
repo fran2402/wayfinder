@@ -102,7 +102,18 @@ export function layoutLine(variantList) {
     const above = [...segs.values()].filter(s => s.r1 === r).length, below = [...segs.values()].filter(s => s.r0 === r).length;
     if (above + below === 1) ends.push({ row: r, up: below === 1, col: span[r][0] });
   });
-  return { rows, segs: [...segs.values()], span, ends, cols: Math.max(1, ...[...segs.values()].map(s => s.col + 1)) };
+  // One-way stations: called at only in one direction of travel (down or up the strip), when the line
+  // runs both ways. Each original variant's direction is the way it mostly goes through the rows.
+  const dirs = new Map(); let downs = 0, ups = 0;
+  for (const v of seqs) {
+    let d = 0;
+    for (let i = 1; i < v.length; i++) { const a = row.get(v[i - 1].key), b = row.get(v[i].key); if (a != null && b != null) d += Math.sign(b - a); }
+    if (!d) continue;
+    const dir = d > 0 ? "down" : "up"; d > 0 ? downs++ : ups++;
+    for (const x of v) { if (!dirs.has(x.key)) dirs.set(x.key, new Set()); dirs.get(x.key).add(dir); }
+  }
+  const oneway = order.map(k => downs && ups && dirs.get(k)?.size === 1 ? [...dirs.get(k)][0] : null);
+  return { rows, oneway, segs: [...segs.values()], span, ends, cols: Math.max(1, ...[...segs.values()].map(s => s.col + 1)) };
 }
 
 /** Lines meeting the line at each row, for its badges and ticks. */
@@ -166,7 +177,13 @@ export function drawLineDiagram(line, lay, meet) {
       const yy = top + Math.floor(k / 2) * 3.4, col = colourOf(o);
       g += k % 2 === 0 ? `<line x1="${left - 8}" y1="${yy}" x2="${left}" y2="${yy}" stroke="${col}" stroke-width="2"/>` : `<line x1="${right}" y1="${yy}" x2="${right + 8}" y2="${yy}" stroke="${col}" stroke-width="2"/>`;
     });
-    if (a === b && !n) g += `<circle cx="${x(a)}" cy="${y}" r="4.6" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.7"/>`;
+    const ow = lay.oneway?.[i];
+    if (a === b && ow) {
+      // Called at one way only: a half circle, its round side pointing the way the line goes there.
+      const cx = x(a), r = 6, fy = ow === "down" ? y - 2.6 : y + 2.6;
+      g += `<path d="M${cx - r} ${fy} A${r} ${r} 0 0 ${ow === "down" ? 0 : 1} ${cx + r} ${fy} Z" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.7" stroke-linejoin="round"/>`;
+    }
+    else if (a === b && !n) g += `<circle cx="${x(a)}" cy="${y}" r="4.6" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.7"/>`;
     else g += `<rect x="${left}" y="${y - h / 2}" width="${right - left}" height="${h}" rx="${Math.min(4.5, h / 2)}" fill="var(--stop-fill)" stroke="var(--ring)" stroke-width="1.7"/>`;
   });
   svg.innerHTML = g;

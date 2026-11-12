@@ -305,13 +305,15 @@ let opts = { zoom: 13, bucket: 11, spread: true, liveOnly: true, enabledSet: new
 /* Lines running right now: every vehicle on the move in a tile (from now to 30 minutes ahead),
    by kind and name. A line with nothing running isn't drawn, and neither are its stops. */
 const live = new Map();          // tile key → { box, names:Set } | { box, failed:true }
-let running = null;              // Set of "cls|name", or null while unknown
+let running = new Set();         // "cls|name" running in the tiles whose live data arrived
+const unknown = new Map();       // tile key → box, while its live data hasn't arrived (or failed): lines there are drawn meanwhile
 let runningHops = new Set();     // "stopId>stopId" hops vehicles are making now
 let runDirty = true;
 const norm = n => String(n || "").toLowerCase().replace(/\s+/g, "");
 function recomputeRunning() {
   const vals = [...live.values()];
-  running = !vals.length || vals.some(v => v.failed) ? null : new Set(vals.flatMap(v => [...v.names]));
+  running = new Set(vals.filter(v => !v.failed).flatMap(v => [...v.names]));
+  for (const [k, v] of live) if (v.failed) unknown.set(k, v.box); else unknown.delete(k);
   runningHops = new Set(vals.flatMap(v => v.hops ? [...v.hops] : []));
   runDirty = true;
 }
@@ -327,8 +329,10 @@ function markRunning() {
     if (v.run) v.line.anyRun = true;
   }
 }
-const variantRuns = v => !opts.liveOnly || !running || (isRunning(v.line) && (v.run || !v.line.anyRun));
-const isRunning = l => !opts.liveOnly || !running || running.has(l.cls + "|" + norm(l.name));
+// A line is drawn while it isn't known yet whether it runs (its area's live data is still on its way).
+const inUnknown = l => { if (!l.bbox) return true; for (const b of unknown.values()) if (b[0] <= l.bbox[2] && b[2] >= l.bbox[0] && b[1] <= l.bbox[3] && b[3] >= l.bbox[1]) return true; return false; };
+const isRunning = l => !opts.liveOnly || running.has(l.cls + "|" + norm(l.name)) || inUnknown(l);
+const variantRuns = v => !opts.liveOnly || (isRunning(v.line) && (v.run || !v.line.anyRun || inUnknown(v.line)));
 const visible = l => opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls] && isRunning(l);
 const shownVariant = v => visible(v.line) && variantRuns(v);
 
@@ -488,6 +492,8 @@ async function loadTile(t) {
   const ctrl = new AbortController();
   inflight.set(t.key, ctrl);
   const [w, s, e, n] = t.box, f = v => v.toFixed(6);
+  unknown.set(t.key, t.box);
+  loadLive(t); // what runs there, at the same time as the lines themselves
   try {
     const res = await fetch(`${API}/experimental/map/routes?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&language=en`, { signal: ctrl.signal });
     if (!res.ok) {
@@ -498,7 +504,8 @@ async function loadTile(t) {
     }
     const d = await res.json();
     try { ingest(d, t.zq, t.box); } catch (err) { postMessage({ type: "error", message: String(err && err.stack || err) }); }
-    loadLive(t);
+    runDirty = true;
+    render(); // draw this tile's lines now, without waiting for the rest
     postMessage({ type: "tile", key: t.key, status: "done" });
   } catch (err) {
     postMessage({ type: "tile", key: t.key, status: err.name === "AbortError" ? "cancelled" : "failed" });
@@ -531,7 +538,12 @@ async function loadLive(t) {
     }
     for (const tr of trips.values()) tr.hops.sort((a, b) => a.t0 - b.t0);
     live.set(t.key, { box: t.box, zq: t.zq, names, hops, trips, at: now });
-  } catch { live.set(t.key, { box: t.box, zq: t.zq, failed: true, at: now }); }
+  } catch {
+    live.set(t.key, { box: t.box, zq: t.zq, failed: true, at: now });
+    // The live service is busy at times: try again soon (a few times), not only at the next refresh.
+    const tries = (t.tries || 0) + 1;
+    if (tries <= 3) setTimeout(() => { if (live.get(t.key)?.failed) loadLive({ ...t, tries }); }, 15000 * tries);
+  }
   recomputeRunning();
   render();
 }
@@ -573,13 +585,17 @@ function vehicles() {
       const cls = classOf(tr.mode);
       if (!opts.enabledSet.has(cls) || opts.zoom < DRAW_FROM[cls]) continue;
       const p = along(h, f);
+      // Which way it's heading: towards a point a little further along (or from a little before, at the end).
+      const q = f < 0.97 ? along(h, Math.min(1, f + 0.03)) : p, o = f < 0.97 ? p : along(h, 0.97);
+      const dx = (q[0] - o[0]) * Math.cos(p[1] * RAD), dy = q[1] - o[1];
+      const brg = dx || dy ? (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360 : 0;
       if (p[0] < bw || p[0] > be || p[1] < bs || p[1] > bn) continue;
       seenTrips.add(tr.id);
       // The line it belongs to: that name's instance around here.
       const base = baseKey(cls, String(tr.name || "?").trim());
       const line = (byBase.get(base) || []).find(l => l.bbox && p[0] > l.bbox[0] - 0.3 && p[0] < l.bbox[2] + 0.3 && p[1] > l.bbox[1] - 0.2 && p[1] < l.bbox[3] + 0.2);
       out.push({ type: "Feature", geometry: { type: "Point", coordinates: p },
-        properties: { trip: tr.id, n: tr.name, key: line?.key || "", c: line ? drawColour(line) === TRAIN_GREY ? TRAIN_GREY : colourOf(line) : (tr.colour ? "#" + tr.colour : TRAIN_GREY), rt: tr.rt ? 1 : 0, cls } });
+        properties: { trip: tr.id, n: tr.name, key: line?.key || "", c: line ? drawColour(line) === TRAIN_GREY ? TRAIN_GREY : colourOf(line) : (tr.colour ? "#" + tr.colour : TRAIN_GREY), rt: tr.rt ? 1 : 0, cls, b: Math.round(brg) } });
     }
   }
   return out;

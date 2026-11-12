@@ -1,3 +1,4 @@
+import { isDarkText } from "./vehicles.js";
 // The transit network on the map — the main-thread half. It decides which tiles to ask for and
 // hands the finished map data to MapLibre; the heavy work happens in net-worker.js.
 
@@ -53,14 +54,18 @@ export function networkLayers(t) {
       paint: { "circle-radius": ["case", ["==", ["get", "end"], 1], 6.5, 3.2], "circle-color": t.stopFill,
         "circle-stroke-color": ["case", ["==", ["get", "end"], 1], t.ring, ["get", "c"]], "circle-stroke-width": ["case", ["==", ["get", "end"], 1], 2.6, 1.6] } },
   ];
-  // Vehicles on the move: a dot in the line's colour, its number inside from zoom 14.
+  // Vehicles on the move: a marker in the line's colour pointing the way it goes, the kind of vehicle
+  // inside — and from zoom 15 its line number instead.
+  const vsize = ["interpolate", ["linear"], ["zoom"], 10, 0.45, 13, 0.7, 15, 0.9, 17, 1.1];
+  const vcommon = { "icon-allow-overlap": true, "icon-ignore-placement": true, "icon-size": vsize };
   stations.push(
-    { id: "vehicles", type: "circle", source: "vehicles",
-      paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3.2, 14, 7.5, 17, 11], "circle-color": ["get", "c"],
-        "circle-stroke-color": t.stopFill, "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.2] } },
-    { id: "vehicle-labels", type: "symbol", source: "vehicles", minzoom: 14,
-      layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "text-allow-overlap": true, "text-ignore-placement": true, "text-max-width": 3 },
-      paint: { "text-color": "#fff" } });
+    { id: "vehicles", type: "symbol", source: "vehicles",
+      layout: { ...vcommon, "icon-image": ["concat", "veh-", ["slice", ["get", "c"], 1]], "icon-rotate": ["get", "b"], "icon-rotation-alignment": "map", "symbol-sort-key": ["get", "rt"] } },
+    { id: "vehicle-glyphs", type: "symbol", source: "vehicles", maxzoom: 15,
+      layout: { ...vcommon, "icon-image": ["concat", "vg-", ["get", "cls"], ["case", ["==", ["get", "d"], 1], "-d", "-w"]] } },
+    { id: "vehicle-labels", type: "symbol", source: "vehicles", minzoom: 15,
+      layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 15, 9, 17, 11.5], "text-allow-overlap": true, "text-ignore-placement": true, "text-max-width": 3 },
+      paint: { "text-color": ["case", ["==", ["get", "d"], 1], "#111111", "#FFFFFF"] } });
   const labels = [
     // Names only where there's room: big rail stations from zoom 13, busy stops from 15, every stop from 16.5.
     { id: "station-labels", type: "symbol", source: "stations",
@@ -129,7 +134,7 @@ export class Network {
     this.byId = new Map();    // the worker's short line ids → line keys
     this.urls = [];
     this.lastSent = "";
-    this.renderSoon = debounce(force => this.render(force), 350);
+    this.renderSoon = debounce(force => this.render(force), 120);
     this.worker.onmessage = ({ data: m }) => this.onWorker(m);
     this.worker.onerror = e => console.error("Network worker:", e.message);
   }
@@ -158,7 +163,7 @@ export class Network {
     this.render();
   }
   pump() {
-    while (this.active < 3 && this.queue.length) {
+    while (this.active < 4 && this.queue.length) {
       const t = this.queue.shift();
       this.active++;
       this.tiles.set(t.key, "loading");
@@ -200,6 +205,7 @@ export class Network {
       this.emit();
     } else if (m.type === "vehicles") {
       this.vehicleCount = m.features.length;
+      for (const f of m.features) { const c = f.properties.c; if (!/^#[0-9a-fA-F]{6}$/.test(c)) f.properties.c = "#5F6368"; f.properties.d = isDarkText(f.properties.c) ? 1 : 0; }
       this.map.getSource("vehicles")?.setData({ type: "FeatureCollection", features: m.features });
       for (const fn of this.tickers || []) fn();
     } else if (m.type === "error") {
@@ -210,7 +216,8 @@ export class Network {
   }
   setData(name, buf) {
     const src = this.map.getSource(name);
-    if (!src) return;
+    // Not on the map yet (the style is still loading): ask again once it is.
+    if (!src) { if (!this.waitingStyle) { this.waitingStyle = true; this.map.once("style.load", () => { this.waitingStyle = false; this.render(true); }); } return; }
     const url = URL.createObjectURL(new Blob([buf], { type: "application/json" }));
     src.setData(url);
     this.urls.push(url);
@@ -245,7 +252,7 @@ export class Network {
     m.setPaintProperty("station-labels", "text-opacity", sop);
     if (m.getLayer("vehicles")) {
       const vop = this.dimmed ? 0.35 : this.focusKey ? ["case", ["==", ["get", "key"], this.focusKey], 1, 0.12] : 1;
-      m.setPaintProperty("vehicles", "circle-opacity", vop); m.setPaintProperty("vehicles", "circle-stroke-opacity", vop);
+      m.setPaintProperty("vehicles", "icon-opacity", vop); m.setPaintProperty("vehicle-glyphs", "icon-opacity", vop);
       m.setPaintProperty("vehicle-labels", "text-opacity", vop);
     }
   }
