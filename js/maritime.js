@@ -7,7 +7,9 @@
 import { ensure, ensureAll } from "./icons.js";
 import { debounce } from "./util.js";
 
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
+// Public Overpass servers: often busy, so each request tries them in turn (and remembers which one answered).
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const CELL = 0.2;
 const C = { red: "#E5383B", green: "#23A455", yellow: "#FFC531", black: "#202124", white: "#FFFFFF", orange: "#F28C28", blue: "#1A73E8", grey: "#9AA0A6", brown: "#8D6E63", amber: "#FFB300", violet: "#8E44AD", magenta: "#C2185B" };
 const INK = "#1D2B3A", NAVY = "#174EA6", SEA = "#1A73E8", MAG = "#B0379A", TSS = "#A64BE8";
 const FLARE = { red: "#E5383B", green: "#23A455", white: "#FFC531", yellow: "#FFC531", orange: "#F28C28", blue: "#1A73E8", violet: "#8E44AD" };
@@ -321,59 +323,97 @@ function centroid(g) { let x = 0, y = 0; for (const p of g) { x += p[0]; y += p[
 export class SeaMarks {
   constructor(map) {
     this.map = map; this.on = true;
-    this.cells = new Set(); this.byId = new Map(); this.queue = []; this.busy = false; this.lit = [];
-    const update = debounce(() => this.update(), 500);
+    this.cells = new Map(); // "x,y" → "loading" | "done" | time of the last failure
+    this.byId = new Map(); this.queue = []; this.running = 0; this.lit = [];
+    this.server = 0;
+    const update = debounce(() => this.update(), 400);
     map.on("moveend", update);
     map.on("zoomend", debounce(() => this.arcs(), 120));
+    map.on("style.load", () => this.fallback());
+  }
+  /** Grid cells (0.2°) in view. */
+  inView() {
+    const b = this.map.getBounds(), out = [];
+    for (let x = Math.floor(b.getWest() / CELL); x <= Math.floor(b.getEast() / CELL); x++)
+      for (let y = Math.floor(b.getSouth() / CELL); y <= Math.floor(b.getNorth() / CELL); y++) out.push([x, y]);
+    return out;
   }
   update() {
+    this.fallback();
     if (!this.on || this.map.getZoom() < 10) return;
-    const b = this.map.getBounds(), S = 0.25, missing = [];
-    for (let x = Math.floor(b.getWest() / S); x <= Math.floor(b.getEast() / S); x++)
-      for (let y = Math.floor(b.getSouth() / S); y <= Math.floor(b.getNorth() / S); y++)
-        if (!this.cells.has(x + "," + y)) missing.push([x, y]);
-    if (!missing.length) return;
-    // One request per block of at most 4 × 3 cells (1° × 0.75°): Overpass serves few requests at once.
+    const cells = this.inView();
+    if (cells.length > 60) return; // too far out: the chart tiles show it
+    const now = Date.now(), c = this.map.getCenter();
+    const missing = cells.filter(([x, y]) => { const st = this.cells.get(x + "," + y); return st == null || (typeof st === "number" && now - st > 60000); });
+    // Nearest first, in blocks of up to 2 × 2 cells: small requests that the servers answer quickly.
+    missing.sort((a, b) => Math.hypot((a[0] + 0.5) * CELL - c.lng, (a[1] + 0.5) * CELL - c.lat) - Math.hypot((b[0] + 0.5) * CELL - c.lng, (b[1] + 0.5) * CELL - c.lat));
     const blocks = new Map();
-    for (const [x, y] of missing) { const k = Math.floor(x / 4) + "," + Math.floor(y / 3); (blocks.get(k) || blocks.set(k, []).get(k)).push([x, y]); }
-    const c = this.map.getCenter();
-    const list = [...blocks.values()].map(cells => {
-      const xs = cells.map(c => c[0]), ys = cells.map(c => c[1]);
-      return { cells, bbox: [Math.min(...ys) * S, Math.min(...xs) * S, (Math.max(...ys) + 1) * S, (Math.max(...xs) + 1) * S] };
-    }).sort((a, b) => Math.hypot((a.bbox[1] + a.bbox[3]) / 2 - c.lng, (a.bbox[0] + a.bbox[2]) / 2 - c.lat) - Math.hypot((b.bbox[1] + b.bbox[3]) / 2 - c.lng, (b.bbox[0] + b.bbox[2]) / 2 - c.lat));
-    for (const blk of list) { for (const [x, y] of blk.cells) this.cells.add(x + "," + y); }
-    this.queue.unshift(...list);
-    this.next();
+    for (const [x, y] of missing) { const k = (x >> 1) + "," + (y >> 1); (blocks.get(k) || blocks.set(k, []).get(k)).push([x, y]); }
+    for (const cs of blocks.values()) { for (const [x, y] of cs) this.cells.set(x + "," + y, "loading"); this.queue.push(cs); }
+    for (let i = 0; i < 2; i++) this.next();
   }
   async next() {
-    if (this.busy || !this.queue.length) return;
-    this.busy = true;
-    const blk = this.queue.shift();
+    if (this.running >= 2 || !this.queue.length) return;
+    const cs = this.queue.shift();
+    const xs = cs.map(c => c[0]), ys = cs.map(c => c[1]);
+    const bbox = [Math.min(...ys) * CELL, Math.min(...xs) * CELL, (Math.max(...ys) + 1) * CELL, (Math.max(...xs) + 1) * CELL].map(v => +v.toFixed(4));
     const v = this.map.getBounds();
-    // Skip blocks that scrolled out of view meanwhile; they'll be asked for again when back.
-    if (blk.bbox[2] < v.getSouth() || blk.bbox[0] > v.getNorth() || blk.bbox[3] < v.getWest() || blk.bbox[1] > v.getEast()) {
-      for (const [x, y] of blk.cells) this.cells.delete(x + "," + y);
-      this.busy = false; return this.next();
+    if (bbox[2] < v.getSouth() || bbox[0] > v.getNorth() || bbox[3] < v.getWest() || bbox[1] > v.getEast()) {
+      for (const [x, y] of cs) this.cells.delete(x + "," + y);
+      return this.next();
     }
-    const bb = `(${blk.bbox.join(",")})`;
-    const q = `[out:json][timeout:60];(node["seamark:type"]${bb};node["blue_flag"="yes"]${bb};node["man_made"="lighthouse"]${bb};node["leisure"="slipway"]${bb};)->.n;`
-      + `(way["seamark:type"]${bb};way["blue_flag"="yes"]${bb};way["man_made"="lighthouse"]${bb};)->.w;(relation["seamark:type"]${bb};relation["blue_flag"="yes"]${bb};)->.r;.n out qt;.w out geom qt;.r out center tags qt;`;
+    this.running++;
     let ok = false;
-    for (const url of OVERPASS) {
+    try {
+      const data = await this.fetchArea(bbox);
+      const feats = featuresOf(data.elements || []);
+      await ensureAll([...new Set(feats.map(f => f.properties.icon).filter(Boolean))].map(id => [id, defOf(id)]).filter(([, d]) => d));
+      for (const f of feats) this.byId.set(f.id, f);
+      ok = true;
+    } catch { /* all servers failed: the chart tiles stay on here, and we try again later */ }
+    for (const [x, y] of cs) this.cells.set(x + "," + y, ok ? "done" : Date.now());
+    this.running--;
+    if (ok) this.apply(); else this.fallback();
+    this.next();
+  }
+  /** One area from the cache (a week), or from the first Overpass server that answers. */
+  async fetchArea(bbox) {
+    const bb = `(${bbox.join(",")})`;
+    const q = `[out:json][timeout:25];(node["seamark:type"]${bb};node["blue_flag"="yes"]${bb};node["man_made"="lighthouse"]${bb};node["leisure"="slipway"]${bb};)->.n;`
+      + `(way["seamark:type"]${bb};way["blue_flag"="yes"]${bb};way["man_made"="lighthouse"]${bb};)->.w;(relation["seamark:type"]${bb};relation["blue_flag"="yes"]${bb};)->.r;.n out qt;.w out geom qt;.r out center tags qt;`;
+    const key = "https://wayfinder.cache/sea/v1/" + bbox.join("_");
+    let cache = null;
+    try { cache = await caches.open("wayfinder-sea"); const hit = await cache.match(key); if (hit && Date.now() - +hit.headers.get("x-at") < 7 * 864e5) return hit.json(); } catch { cache = null; }
+    for (let i = 0; i < OVERPASS.length; i++) {
+      const url = OVERPASS[(this.server + i) % OVERPASS.length];
       try {
-        const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 35000);
+        const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ctl.signal });
+        clearTimeout(timer);
         if (!res.ok) throw new Error(res.status);
-        const feats = featuresOf((await res.json()).elements);
-        await ensureAll([...new Set(feats.map(f => f.properties.icon).filter(Boolean))].map(id => [id, defOf(id)]).filter(([, d]) => d));
-        for (const f of feats) this.byId.set(f.id, f);
-        ok = true;
-        this.apply();
-        break;
-      } catch { /* try the next server */ }
+        const text = await res.text();
+        const data = JSON.parse(text);
+        if (data.remark && /runtime error|timed out|out of memory/i.test(data.remark)) throw new Error(data.remark);
+        this.server = (this.server + i) % OVERPASS.length; // keep using the one that works
+        cache?.put(key, new Response(text, { headers: { "content-type": "application/json", "x-at": String(Date.now()) } })).catch(() => {});
+        return data;
+      } catch { /* next server */ }
     }
-    if (!ok) for (const [x, y] of blk.cells) this.cells.delete(x + "," + y);
-    this.busy = false;
-    if (ok) this.next(); else setTimeout(() => this.next(), 15000);
+    throw new Error("no Overpass server answered");
+  }
+  /**
+   * The OpenSeaMap chart tiles: shown while zoomed out, and wherever the drawn sea marks
+   * haven't loaded (yet, or because the servers are busy) — so the information is always there.
+   */
+  fallback() {
+    if (!this.map.getLayer("seamarks-tiles")) return;
+    const z = this.map.getZoom();
+    let need = this.on && z >= 9;
+    if (need && z >= 10) {
+      const cells = this.inView();
+      need = cells.length > 60 || cells.some(([x, y]) => this.cells.get(x + "," + y) !== "done");
+    }
+    this.map.setLayoutProperty("seamarks-tiles", "visibility", need ? "visible" : "none");
   }
   apply() {
     const pts = [], lines = [];
@@ -386,6 +426,7 @@ export class SeaMarks {
     this.map.getSource("sea-marks")?.setData({ type: "FeatureCollection", features: pts });
     this.map.getSource("sea-lines")?.setData({ type: "FeatureCollection", features: lines });
     this.arcs();
+    this.fallback();
   }
   /** Light sectors: arcs a fixed distance on screen from each light, in the sector's colour, with dashed limits. */
   arcs() {
@@ -394,7 +435,7 @@ export class SeaMarks {
     const z = this.map.getZoom(), feats = [];
     if (z >= 11.5) for (const f of this.lit) {
       const [lon, lat] = f.geometry.coordinates, k = Math.cos(lat * Math.PI / 180);
-      const mpp = 78271.517 * k / 2 ** z, r = (f.major ? 52 : 36) * mpp;
+      const mpp = 78271.517 * k / 2 ** z, r = (f.major ? 72 : 48) * mpp;
       const at = (b, d) => [lon + d * Math.sin(b * Math.PI / 180) / (111320 * k), lat + d * Math.cos(b * Math.PI / 180) / 110540];
       for (const l of f.lights) {
         // Sector limits are given as bearings towards the light from seaward.
@@ -411,6 +452,8 @@ export class SeaMarks {
 /* ============================== Layers ============================== */
 
 export const seaSources = () => ({
+  "seamarks-tiles": { type: "raster", tiles: ["https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png"], tileSize: 256, minzoom: 9, maxzoom: 18,
+    attribution: '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a>' },
   "sea-marks": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
   "sea-lines": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
   "sea-arcs": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
@@ -428,24 +471,28 @@ export function seaLayers(t) {
       line("sea-line-solid", { k: "solid" }),
       line("sea-line-dash", { k: "dash", a: [4, 3] }),
       line("sea-line-dot", { k: "dot", a: [0.1, 2.6] }),
+      { id: "sea-line-names", type: "symbol", source: "sea-lines", minzoom: 13, filter: ["all", ["==", ["geometry-type"], "LineString"], ["!=", ["get", "name"], ""]],
+        layout: { "symbol-placement": "line", "text-field": ["get", "name"], "text-font": ["Noto Sans Italic"], "text-size": 10.5, "symbol-spacing": 300 },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
       { id: "sea-lane-arrows", type: "symbol", source: "sea-lines", minzoom: 10, filter: ["==", ["get", "lane"], 1],
         layout: { "symbol-placement": "line", "symbol-spacing": 220, "icon-image": "sm-arrow", "icon-size": zs(9, 0.75, 13, 1, 18, 1.3), "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true } },
     ],
     over: [
+      { id: "seamarks-tiles", type: "raster", source: "seamarks-tiles", minzoom: 9, paint: { "raster-fade-duration": 200 } },
       { id: "sea-arc-limits", type: "line", source: "sea-arcs", filter: ["==", ["get", "t"], "limit"], paint: { "line-color": t.label, "line-width": 0.8, "line-opacity": 0.55, "line-dasharray": [5, 4] } },
       { id: "sea-arc-halo", type: "line", source: "sea-arcs", filter: ["==", ["get", "t"], "arc"], layout: { "line-cap": "round" }, paint: { "line-color": "#FFFFFF", "line-width": 5.5, "line-opacity": 0.9 } },
       { id: "sea-arcs", type: "line", source: "sea-arcs", filter: ["==", ["get", "t"], "arc"], layout: { "line-cap": "round" }, paint: { "line-color": ["get", "c"], "line-width": 3.2 } },
-      ...[[1, 9], [2, 12], [3, 13.5], [4, 15.5]].map(([tier, minzoom]) => ({
+      ...[[1, 9], [2, 11], [3, 12.5], [4, 14.5]].map(([tier, minzoom]) => ({
         id: "sea-marks-" + tier, type: "symbol", source: "sea-marks", minzoom, filter: ["==", ["get", "tier"], tier],
-        layout: { "icon-image": ["get", "icon"], "icon-anchor": ["get", "anchor"], "icon-size": zs(minzoom, 0.72, Math.min(minzoom + 2.5, 18), 0.92, 19, 1.05), "icon-padding": 1,
-          "text-field": ["step", ["zoom"], "", 13.5, ["get", "name"], 15.5, ["get", "label"]], "text-font": ["Noto Sans Italic"], "text-size": 10.5, "text-optional": true,
+        layout: { "icon-image": ["get", "icon"], "icon-anchor": ["get", "anchor"], "icon-size": zs(minzoom, 0.72, Math.min(minzoom + 2.5, 18), 0.92, 19, 1.05), "icon-padding": 0, "icon-allow-overlap": tier <= 2,
+          "text-field": ["step", ["zoom"], "", 12.5, ["get", "name"], 14, ["get", "label"]], "text-font": ["Noto Sans Italic"], "text-size": 10.5, "text-optional": true,
           "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 1.3, "text-justify": "auto", "text-max-width": 10, "symbol-sort-key": tier },
         paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 },
       })),
     ],
   };
 }
-export const SEA_LAYER_IDS = ["sea-area", "sea-line-solid", "sea-line-dash", "sea-line-dot", "sea-lane-arrows", "sea-arc-limits", "sea-arc-halo", "sea-arcs", "sea-marks-1", "sea-marks-2", "sea-marks-3", "sea-marks-4", "sea-poi", "ferry-route", "ferry-names", "sea-border"];
+export const SEA_LAYER_IDS = ["seamarks-tiles", "sea-area", "sea-line-solid", "sea-line-dash", "sea-line-dot", "sea-lane-arrows", "sea-line-names", "sea-arc-limits", "sea-arc-halo", "sea-arcs", "sea-marks-1", "sea-marks-2", "sea-marks-3", "sea-marks-4", "sea-poi", "ferry-route", "ferry-names", "sea-border"];
 
 /** For checking the drawings: a sample of marks as [id, svg]. */
 export function sampleMarks() {
