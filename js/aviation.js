@@ -178,7 +178,7 @@ export async function lookupFlight(code) {
 }
 
 /** Your flights relay (worker/flights.js deployed on Cloudflare), e.g. "https://wayfinder-flights.you.workers.dev". Empty: boards say "Soon". */
-export const FLIGHTS_RELAY = "";
+export const FLIGHTS_RELAY = "https://wayfinder-flights.stimacfran.workers.dev";
 
 /** Departures and arrivals happening now around an airport, from the relay. */
 export async function airportBoard({ lat, lon, iata, icao }) {
