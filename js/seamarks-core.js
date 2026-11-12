@@ -33,7 +33,7 @@ const BODIES = {
   cairn: { d: "M7.5 35l3.2-8.2 4.3-3.3 4.3 3.3 3.2 8.2z", top: 23.5, x: [7.5, 22.5], base: true },
 };
 const BODY_OF = {
-  can: "can", conical: "conical", pillar: "pillar", spar: "spar", spherical: "spherical", barrel: "barrel", "super-buoy": "super", ice_buoy: "pillar",
+  can: "can", conical: "conical", pillar: "pillar", spar: "spar", spherical: "spherical", barrel: "barrel", "super-buoy": "super", super: "super", ice_buoy: "pillar",
   stake: "stake", withy: "stake", pile: "stake", pile_beacon: "stake", pole: "stake", post: "stake", beacon_tower: "tower", tower: "tower", lattice_beacon: "lattice", lattice: "lattice", cairn: "cairn", buoyant_beacon: "pillar",
 };
 
@@ -293,7 +293,8 @@ function pointOf(t) {
     }
     const body = BODY_OF[shape] || (beacon ? "stake" : "pillar");
     pattern = pattern.includes("vertical") ? "vertical" : "horizontal";
-    const spec = { body, colours: colours.slice(0, 4), pattern, tm, tmColour, light: lit };
+    // Light floats and light vessels are lit by definition, even when the light isn't tagged.
+    const spec = { body, colours: colours.slice(0, 4), pattern, tm, tmColour, light: lit || (kind === "light_float" ? "white" : "") };
     icon = "sm-b-" + [body, spec.colours.join("."), pattern, tm, tmColour, lit].join("-");
     BUOY_SPECS.set(icon, spec);
     tier = kind === "cardinal" || kind === "isolated_danger" || kind === "safe_water" || type === "light_vessel" ? 1 : kind === "lateral" && !beacon ? 2 : 3;
