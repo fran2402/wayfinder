@@ -16,7 +16,7 @@ const ask = msg => new Promise((resolve, reject) => { const id = ++seq; pending.
 
 let blank = null;
 async function blankPng() {
-  if (!blank) blank = new OffscreenCanvas(1, 1).convertToBlob({ type: "image/png" }).then(b => b.arrayBuffer());
+  if (!blank) { const c = new OffscreenCanvas(1, 1); c.getContext("2d"); blank = c.convertToBlob({ type: "image/png" }).then(b => b.arrayBuffer()); }
   return (await blank).slice(0);
 }
 

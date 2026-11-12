@@ -10,6 +10,7 @@
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
+import { patternImage } from "./patterns.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
@@ -37,7 +38,7 @@ map.on("error", e => console.warn("Map:", e.error?.message || e));
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '<a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>' }), "bottom-right");
-map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e.id, THEMES[themeNow()]); });
+map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e.id, THEMES[themeNow()]); else if (e.id.startsWith("pat-")) patternImage(map, e.id); });
 
 const net = new Network(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
