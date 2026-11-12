@@ -41,7 +41,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 /* ================= Frame ================= */
 #map { position: fixed; inset: 0; background: #EEE; }
 .maplibregl-ctrl-attrib { font-size: 10.5px; }
-.maplibregl-ctrl-bottom-right { bottom: var(--sheet); transition: bottom .4s var(--ease); }
+.maplibregl-ctrl-bottom-right { bottom: 0; transition: bottom .4s var(--ease); }
 
 .searchwrap { position: fixed; z-index: 12; top: 12px; left: 12px; width: var(--w); }
 .pill-search { display: flex; align-items: center; height: 50px; padding: 0 6px; border-radius: 25px; background: var(--bg); box-shadow: var(--shadow); }
@@ -100,6 +100,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
   .grip span { width: 38px; height: 5px; border-radius: 3px; background: var(--chip-2); }
   .phead { padding-top: 0; }
   .body { padding-top: 10px; }
+  .maplibregl-ctrl-bottom-right { bottom: var(--sheet); }
   .mapctl { right: 10px; bottom: calc(var(--sheet) + 12px); }
   .zoomgrp { display: none; }
   body[data-sheet="full"] .mapctl, body[data-sheet="full"] .livepill { opacity: 0; pointer-events: none; }

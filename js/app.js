@@ -10,7 +10,7 @@
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
-import { patternImage } from "./patterns.js";
+import { seaIcon, SeaPlaces } from "./maritime.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
@@ -19,7 +19,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -38,9 +38,10 @@ map.on("error", e => console.warn("Map:", e.error?.message || e));
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '<a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>' }), "bottom-right");
-map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e.id, THEMES[themeNow()]); else if (e.id.startsWith("pat-")) patternImage(map, e.id); });
+map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e.id, THEMES[themeNow()]); else if (e.id.startsWith("sea-")) seaIcon(map, e.id); });
 
 const net = new Network(map);
+const sea = new SeaPlaces(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -568,6 +569,8 @@ function applyLayers() {
   const vis = on => on ? "visible" : "none";
   for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
+  for (const id of ["seamarks", "sea-poi", "sea-places", "ferry-route", "ferry-names", "sea-border"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
+  sea.on = settings.sea; if (settings.sea) { sea.apply(); sea.update(); }
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
 map.on("style.load", applyLayers);
@@ -583,6 +586,7 @@ function renderLayers() {
     ${settings.transit ? `<div class="kinds">${CLASSES.filter(c => net.seen.has(c.id) || !net.enabled.has(c.id)).map(c => `<button data-mode="${c.id}" aria-pressed="${net.enabled.has(c.id)}">${icon(c.icon, "xs")}${c.label}</button>`).join("")}</div>` : ""}
     ${sw(settings.vehicles, 'data-set="vehicles"', "Moving vehicles", "Every bus, tram and train, live", "bus")}
     ${sw(settings.places, 'data-layer="places"', "Places", "Shops, food, culture, services", "pin")}
+    ${sw(settings.sea, 'data-layer="sea"', "Sea", "Sea marks, ferries, marinas, lighthouses, Blue Flags", "ferry")}
     ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
     ${soonRow("traffic", "Traffic", "Road speeds and closures")}
     ${soonRow("cloud", "Weather", "Rain radar and forecasts")}
@@ -848,6 +852,7 @@ document.addEventListener("click", async e => {
   if (d.soon) return toast(`${d.soon}: coming soon.`);
   if (d.ptab) { s.tab = d.ptab; return refresh(s); }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "sea") { settings.sea = !settings.sea; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "places") { settings.places = !settings.places; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.more) { s.expanded.add(d.more); return refresh(s); }
   switch (d.act) {

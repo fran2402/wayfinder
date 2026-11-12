@@ -22,6 +22,7 @@ export const THEMES = {
     // Height, from the coast to the peaks: lowland greens, hill tans, mountain browns, rock grey, snow.
     relief: [-50, "#D8EDCB", 0, "#D8EDCB", 100, "#E0F0CC", 250, "#EAF1C8", 500, "#F1EDC0", 800, "#EEDFAE", 1200, "#E4CB98", 1700, "#D3B486", 2300, "#C3A68E", 2900, "#C9BCB3", 3500, "#E4E0DD", 4200, "#FAFAFA"],
     // Crops by the colour of their leaves.
+    ferry: "#1A73E8", seaBorder: "#669DF6", coast: "#8AB4F8", seaLabel: "#185ABC",
     edu: "#FEF7E0", eduLine: "#F0D27A", cemetery: "#D9E5D6", cemLine: "#9DB09A", military: "#FCE8E6", milLine: "#D93025", pitch: "#B7DFB9", pitchLine: "#FFFFFF",
     pool: "#8FDCF5", poolLine: "#3BA5D8", npLine: "#1E8E3E", reserveLine: "#4CAF6A", beachLine: "#4A90E2", apron: "#E6E8EC", runway: "#C4C7CC", runwayLine: "#FFFFFF",
     zoo: "#E6EFD3", zooLine: "#98B56F", border: "#8E7CA8", borderHalo: "#D7CCE6", region: "#A99BBF", pier: "#F8F9FA", dam: "#C4C7CC",
@@ -38,6 +39,7 @@ export const THEMES = {
     label: "#E8EAED", labelMuted: "#9AA0A6", halo: "#1F2124", poi: "#BDC1C6",
     casing: "#1F2124", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#81C995",
     relief: [-50, "#1C2A1F", 0, "#1C2A1F", 100, "#1F2C1F", 250, "#252D1F", 500, "#2B2D20", 800, "#302B20", 1200, "#352B21", 1700, "#382C24", 2300, "#3A302B", 2900, "#3E3836", 3500, "#4A4645", 4200, "#5C5A5A"],
+    ferry: "#8AB4F8", seaBorder: "#4A7CC7", coast: "#2B5C93", seaLabel: "#8AB4F8",
     edu: "#2E2B20", eduLine: "#6B5B2A", cemetery: "#24302A", cemLine: "#4E6152", military: "#3A2424", milLine: "#E57373", pitch: "#25402B", pitchLine: "#6C8F72",
     pool: "#1B5A75", poolLine: "#3D8FB8", npLine: "#5FBF7A", reserveLine: "#4E9E68", beachLine: "#5B8FD0", apron: "#2C2F34", runway: "#45494F", runwayLine: "#6E737A",
     zoo: "#26301F", zooLine: "#5C7044", border: "#9C8BB8", borderHalo: "#3A3248", region: "#7A6E90", pier: "#2A2D31", dam: "#55595E",
@@ -70,6 +72,10 @@ export function buildStyle(theme) {
         attribution: 'Terrain <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen / AWS</a>' },
       // Sea depth, made in tile-worker.js: the sea floor (only in the zoom ≤ 8 elevation tiles) spline-interpolated and coloured.
       depth: { type: "raster", tiles: [`wfdepth://${theme}/{z}/{x}/{y}`], tileSize: 256, maxzoom: 14 },
+      // Sea marks (buoys, beacons, lights and their sectors, harbours, anchorages, wrecks…) from OpenSeaMap.
+      seamarks: { type: "raster", tiles: ["https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png"], tileSize: 256, minzoom: 9, maxzoom: 18,
+        attribution: '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a>' },
+      "sea-places": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
       omt: { type: "vector", url: "wfomt://planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
@@ -107,23 +113,6 @@ export function buildStyle(theme) {
       { id: "landuse-military", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 10, filter: cls("military"), paint: { "fill-color": t.military, "fill-opacity": 0.6 } },
       { id: "landuse-quarry", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 12, filter: cls("quarry"), paint: { "fill-color": t.rock } },
       { id: "landuse-dam", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 13, filter: cls("dam"), paint: { "fill-color": t.dam } },
-      // Textures over the colours: what grows there, what the ground is.
-      ...[
-        ["tex-forest", "landcover", cls("wood", "forest"), "forest", 11],
-        ["tex-crop", "landcover", ["all", cls("farmland"), ["match", ["get", "subclass"], ["farmland", "farm"], true, false]], "crop", 13],
-        ["tex-orchard", "landcover", ["==", ["get", "subclass"], "orchard"], "orchard", 13],
-        ["tex-vineyard", "landcover", ["==", ["get", "subclass"], "vineyard"], "vineyard", 13],
-        ["tex-allotments", "landcover", ["==", ["get", "subclass"], "allotments"], "allotments", 14],
-        ["tex-wetland", "landcover", cls("wetland"), "wetland", 11],
-        ["tex-scrub", "landcover", ["match", ["get", "subclass"], ["scrub"], true, false], "scrub", 12],
-        ["tex-heath", "landcover", ["match", ["get", "subclass"], ["heath", "fell"], true, false], "heath", 12],
-        ["tex-sand", "landcover", cls("sand"), "sand", 12],
-        ["tex-rock", "landcover", cls("rock"), "rock", 11],
-        ["tex-glacier", "landcover", cls("ice"), "glacier", 10],
-        ["tex-cemetery", "landuse", cls("cemetery"), "cemetery", 14],
-        ["tex-military", "landuse", cls("military"), "military", 11],
-        ["tex-quarry", "landuse", cls("quarry"), "quarry", 13],
-      ].map(([id, layer, filter, kind, minzoom]) => ({ id, type: "fill", source: "omt", "source-layer": layer, minzoom, filter, paint: { "fill-pattern": `pat-${kind}-${theme}` } })),
       { id: "water", type: "fill", source: "omt", "source-layer": "water", filter: ["!=", ["get", "brunnel"], "tunnel"], paint: { "fill-color": t.water } },
       // How deep the sea is (the elevation tiles carry the sea floor too).
       { id: "depth", type: "raster", source: "depth", paint: { "raster-resampling": "linear", "raster-fade-duration": 150 } },
@@ -136,6 +125,12 @@ export function buildStyle(theme) {
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: ["all", notTunnel, ["!=", ["get", "intermittent"], 1]],
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },
+      // The sea: a fine coastline, ferry routes, territorial waters.
+      { id: "coastline", type: "line", source: "omt", "source-layer": "water", minzoom: 10, filter: cls("ocean", "sea", "bay", "lake"), paint: { "line-color": t.coast, "line-width": z(10, 0.5, 16, 1.2), "line-opacity": 0.8 } },
+      { id: "ferry-route", type: "line", source: "omt", "source-layer": "transportation", minzoom: 7, filter: cls("ferry"), layout: { "line-cap": "round" },
+        paint: { "line-color": t.ferry, "line-width": z(7, 0.8, 12, 1.6, 16, 2.4), "line-dasharray": [3, 2.5], "line-opacity": 0.85 } },
+      { id: "sea-border", type: "line", source: "omt", "source-layer": "boundary", minzoom: 5, filter: ["all", ["==", ["get", "maritime"], 1], ["<=", ["get", "admin_level"], 4]],
+        paint: { "line-color": t.seaBorder, "line-width": z(5, 0.6, 12, 1.2), "line-dasharray": [6, 3], "line-opacity": 0.7 } },
       // Airports: aprons, taxiways and runways (with centre lines).
       { id: "aeroway-apron", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 13, filter: ["all", ["==", ["geometry-type"], "Polygon"], cls("apron")], paint: { "fill-color": t.apron } },
       { id: "aeroway-taxiway", type: "line", source: "omt", "source-layer": "aeroway", minzoom: 12, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("taxiway")],
@@ -192,12 +187,19 @@ export function buildStyle(theme) {
         paint: { "text-color": t.labelMuted, "text-halo-color": t.halo, "text-halo-width": 1.4 } },
       ...net.lines,
       ...net.stations,
-      { id: "water-names", type: "symbol", source: "omt", "source-layer": "water_name", minzoom: 9, filter: ["==", ["geometry-type"], "Point"],
-        layout: { "text-field": NAME, "text-font": ["Noto Sans Italic"], "text-size": 12, "text-max-width": 8 },
-        paint: { "text-color": t.waterLabel, "text-halo-color": t.halo, "text-halo-width": 1.2 } },
+      // Names on the water: oceans and seas wide and spaced out, bays and straits smaller, all in italic navy.
+      { id: "sea-names", type: "symbol", source: "omt", "source-layer": "water_name", maxzoom: 10, filter: ["all", ["==", ["geometry-type"], "Point"], cls("ocean", "sea")],
+        layout: { "text-field": NAME, "text-font": ["Noto Sans Italic"], "text-size": z(2, 11, 8, 16), "text-letter-spacing": 0.25, "text-max-width": 6, "text-transform": "uppercase" },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.water, "text-halo-width": 0.8, "text-opacity": 0.85 } },
+      { id: "water-names", type: "symbol", source: "omt", "source-layer": "water_name", minzoom: 9, filter: ["all", ["==", ["geometry-type"], "Point"], ["!", cls("ocean", "sea")]],
+        layout: { "text-field": NAME, "text-font": ["Noto Sans Italic"], "text-size": z(9, 11, 15, 13), "text-max-width": 8, "text-letter-spacing": 0.05 },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.2 } },
       { id: "water-names-line", type: "symbol", source: "omt", "source-layer": "water_name", minzoom: 9, filter: ["==", ["geometry-type"], "LineString"],
         layout: { "text-field": NAME, "text-font": ["Noto Sans Italic"], "text-size": 12, "symbol-placement": "line" },
-        paint: { "text-color": t.waterLabel, "text-halo-color": t.halo, "text-halo-width": 1.2 } },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.2 } },
+      { id: "ferry-names", type: "symbol", source: "omt", "source-layer": "transportation_name", minzoom: 11, filter: cls("ferry"),
+        layout: { "symbol-placement": "line", "text-field": NAME, "text-font": ["Noto Sans Italic"], "text-size": 11, "symbol-spacing": 400 },
+        paint: { "text-color": t.ferry, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
       { id: "place-small", type: "symbol", source: "omt", "source-layer": "place", minzoom: 12, maxzoom: 17, filter: cls("suburb", "quarter", "neighbourhood"),
         layout: { "text-field": NAME, "text-font": ["Noto Sans Bold"], "text-size": z(12, 10, 16, 12), "text-transform": "uppercase", "text-letter-spacing": 0.12, "text-max-width": 8 },
         paint: { "text-color": t.labelMuted, "text-halo-color": t.halo, "text-halo-width": 1.4, "text-opacity": 0.85 } },
@@ -217,12 +219,23 @@ export function buildStyle(theme) {
       // Places: shops, food, culture, health… (transit stops come from the network instead).
       ...[["poi-major", ["<", ["get", "rank"], 8], 14.5], ["poi-minor", [">=", ["get", "rank"], 8], 16.5]].map(([id, rank, minzoom]) => ({
         id, type: "symbol", source: "omt", "source-layer": "poi", minzoom,
-        filter: ["all", ["==", ["geometry-type"], "Point"], rank, ["!", ["match", ["get", "class"], ["bus", "rail", "railway", "tram", "ferry_terminal", "aerialway"], true, false]]],
+        filter: ["all", ["==", ["geometry-type"], "Point"], rank, ["!", ["match", ["get", "class"], ["bus", "rail", "railway", "tram", "ferry_terminal", "aerialway", "harbor"], true, false]]],
         layout: { "icon-image": ["match", ["get", "subclass"], ["florist", "furniture"], ["get", "subclass"], ["get", "class"]], "icon-size": 0.9,
           "text-field": NAME, "text-font": ["Noto Sans Regular"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 0.7], "text-max-width": 8,
           "symbol-sort-key": ["get", "rank"] },
         paint: { "text-color": t.poi, "text-halo-color": t.halo, "text-halo-width": 1.3, "icon-opacity": 0.9 },
       })),
+      // Sea marks over everything on the water.
+      { id: "seamarks", type: "raster", source: "seamarks", minzoom: 9, paint: { "raster-fade-duration": 150 } },
+      // Marinas and ferry terminals (base map), Blue Flags, lighthouses, harbours and slipways (OpenStreetMap, live).
+      { id: "sea-poi", type: "symbol", source: "omt", "source-layer": "poi", minzoom: 12, filter: ["all", ["==", ["geometry-type"], "Point"], cls("harbor", "ferry_terminal")],
+        layout: { "icon-image": ["match", ["get", "class"], "ferry_terminal", "sea-ferry", "sea-marina"], "icon-size": z(12, 0.7, 16, 0.95),
+          "text-field": NAME, "text-font": ["Noto Sans Bold"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.1], "text-max-width": 8, "text-optional": true },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
+      { id: "sea-places", type: "symbol", source: "sea-places", minzoom: 11,
+        layout: { "icon-image": ["concat", "sea-", ["get", "kind"]], "icon-size": z(11, 0.7, 16, 0.95), "symbol-sort-key": ["get", "rank"],
+          "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.1], "text-max-width": 8, "text-optional": true },
+        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
       ...net.labels,
     ],
   };
