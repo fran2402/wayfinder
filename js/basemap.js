@@ -7,6 +7,7 @@ import { airSources, airLayers } from "./aviation.js";
 import { streetLayers, streetLabels } from "./streets.js";
 import { skiSources, skiLayers } from "./ski.js";
 import { placeIcon, placeTextColour, HIDDEN } from "./places.js";
+import { planeSources, planeLayers } from "./flights.js";
 export { stopIcon } from "./network.js";
 
 /* The map palette:
@@ -76,6 +77,7 @@ export function buildStyle(theme) {
       ...seaSources(),
       ...airSources(),
       ...skiSources(),
+      ...planeSources(),
       omt: { type: "vector", url: "wfomt://planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
@@ -237,6 +239,7 @@ export function buildStyle(theme) {
       ...ski.labels,
       ...sea.over,
       ...net.labels,
+      ...planeLayers(t),
     ],
   };
 }

@@ -4,6 +4,7 @@
 //   GET /airport?lat=41.30&lon=2.08&iata=BCN&icao=LEBL  → live departures and arrivals around an airport
 //   GET /near?lat=41.30&lon=2.08&dist=40               → aircraft near a point (for planes on the map)
 //   GET /schedule?iata=BCN&dir=departures              → today's whole board: times, gates, terminals, status
+//   GET /track?hex=34324e  or  /track?cs=IBE0689        → one aircraft, live, with its route (for tracking)
 // Data: aircraft positions from adsb.lol (free, ODbL), routes from adsbdb.com (free), no keys needed.
 // The day's schedule comes from AeroDataBox and needs a key: in the Worker's Settings → Variables and Secrets,
 // add a secret AERODATABOX_KEY (your RapidAPI key). Without it /schedule answers 501 and the site shows live flights only.
@@ -23,7 +24,17 @@ export default {
       if (url.pathname === "/near") {
         const lat = num("lat", -90, 90), lon = num("lon", -180, 180), dist = Math.min(100, num("dist", 1, 250));
         const ac = await aircraft(lat, lon, dist, ctx);
-        return send({ at: Date.now(), aircraft: ac.map(a => ({ hex: a.hex, flight: (a.flight || "").trim(), type: a.t, lat: a.lat, lon: a.lon, track: a.track, alt: a.alt_baro, gs: a.gs })) }, 200, 10);
+        return send({ at: Date.now(), aircraft: ac.map(slim) }, 200, 10);
+      }
+      if (url.pathname === "/track") {
+        const hex = (url.searchParams.get("hex") || "").toLowerCase(), cs = (url.searchParams.get("cs") || "").toUpperCase().replace(/\s+/g, "");
+        if (!/^[0-9a-f]{6}$/.test(hex) && !/^[A-Z0-9]{2,8}$/.test(cs)) throw new Error("need hex or cs");
+        const d = await cachedJson(hex ? `https://api.adsb.lol/v2/hex/${hex}` : `https://api.adsb.lol/v2/callsign/${cs}`, 4, ctx);
+        const a = (d?.ac || []).find(x => x.lat != null);
+        if (!a) return send({ at: Date.now(), aircraft: null }, 200, 4);
+        const r = a.flight ? await route(a.flight.trim(), ctx).catch(() => null) : null;
+        const place = ap => ap && { iata: ap.iata_code, icao: ap.icao_code, city: ap.municipality, name: ap.name, lat: ap.latitude, lon: ap.longitude };
+        return send({ at: Date.now(), aircraft: slim(a), route: r && { flight: r.callsign_iata || r.callsign, airline: r.airline?.name || null, from: place(r.origin), to: place(r.destination) } }, 200, 4);
       }
       if (url.pathname === "/schedule") {
         if (!env.AERODATABOX_KEY) return send({ error: "no schedule key" }, 501, 300);
@@ -45,6 +56,10 @@ export default {
     }
   },
 };
+
+/** An aircraft, slimmed to what the map shows. */
+const slim = a => ({ hex: a.hex, flight: (a.flight || "").trim(), type: a.t || null, reg: a.r || null, desc: a.desc || null, lat: a.lat, lon: a.lon, track: a.track ?? a.true_heading ?? null,
+  alt: a.alt_baro, gs: a.gs ?? null, vs: a.baro_rate ?? a.geom_rate ?? null, squawk: a.squawk || null, cat: a.category || null });
 
 /** Aircraft within `dist` nautical miles, from adsb.lol (cached 10 s). */
 async function aircraft(lat, lon, dist, ctx) {

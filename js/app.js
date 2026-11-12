@@ -17,6 +17,7 @@ import { boardHtml, liveRows, markNow } from "./fids.js";
 import { preloadStreetIcons } from "./streets.js";
 import { preloadSkiIcons, SKI_LAYER_IDS } from "./ski.js";
 import { attach as attachIcons } from "./icons.js";
+import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
 import { preloadPlaceIcons, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
@@ -26,7 +27,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, flights: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -57,10 +58,12 @@ map.on("styleimagemissing", e => {
   map.addImage(e.id, { width: 24, height: 24, data: g.getImageData(0, 0, 24, 24).data }, { pixelRatio: 2 });
 });
 attachIcons(map);
-preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); preloadPlaceIcons();
+preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); preloadPlaceIcons(); preloadPlaneIcons();
 
 const net = new Network(map);
 const sea = new SeaArcs(map);
+const planes = new Planes(map);
+planes.onChange(() => { const s = screen(); if (s.t === "flight") refresh(s); });
 new Runways(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
 
@@ -98,7 +101,7 @@ function applyTheme() {
   document.documentElement.dataset.theme = t;
   $('meta[name="theme-color"]').content = t === "dark" ? "#000000" : "#FFFFFF";
   map.setStyle(buildStyle(t));
-  map.once("style.load", () => { net.render(true); net.applyFocus(); applyLayers(); for (const k in overlay) map.getSource(k)?.setData(overlay[k]); });
+  map.once("style.load", () => { net.render(true); net.applyFocus(); applyLayers(); planes.render(); for (const k in overlay) map.getSource(k)?.setData(overlay[k]); });
 }
 darkQuery.addEventListener("change", () => settings.theme === "system" && applyTheme());
 
@@ -213,7 +216,7 @@ addEventListener("popstate", e => {
 
 const TITLES = {
   explore: () => "Explore", settings: () => "Settings", plan: () => "Directions", pick: () => "Lines here", menu: () => "Menu",
-  stop: s => s.name || "Stop", place: s => s.name || "Place", airport: s => s.iata || "Airport", itin: s => `${duration(s.it.duration)} route`,
+  stop: s => s.name || "Stop", place: s => s.name || "Place", airport: s => s.iata || "Airport", flight: s => "Tracking " + (s.cs || "flight"), itin: s => `${duration(s.it.duration)} route`,
   line: s => { const l = registry.get(s.key); return l ? `${classLabel(l.cls)} ${l.name}` : "Line"; },
 };
 /** The panel's header: back, the title, and a way home. Nothing on the start screen (the search is its header). */
@@ -227,6 +230,7 @@ function headHtml() {
 let shown = null;
 function render(fresh = false) {
   const s = screen(), V = VIEWS[s.t];
+  if (s.t !== "flight" && planes.tracked) { planes.stop(); applyLayers(); }
   document.body.dataset.screen = s.t;
   $("#phead").innerHTML = headHtml();
   const keep = shown === s && !fresh ? body.scrollTop : 0;
@@ -437,12 +441,77 @@ VIEWS.line = {
     if (!d) return top + loading(10);
     if (!d.lay) return top + `<div class="note">Nothing of this line is running right now.</div>`;
     const t = d.trip;
-    return top + (t ? `<div class="tripline"><span>${t.live ? "Live trip" : "Next trip"}</span><b>${clock(t.stops[0].time, t.stops[0].tz)}</b> ${esc(t.stops[0].name)} → <b>${clock(t.stops[t.stops.length - 1].time, t.stops[0].tz)}</b> ${esc(t.stops[t.stops.length - 1].name)}</div>` : "")
+    const tabs = `<div class="tabs" role="tablist"><button role="tab" data-ltab="stops" aria-selected="${s.ltab !== "tt"}">Stops</button><button role="tab" data-ltab="tt" aria-selected="${s.ltab === "tt"}">Timetable</button></div>`;
+    if (s.ltab === "tt") return top + tabs + timetableHtml(s, l, d.lay);
+    return top + tabs + (t ? `<div class="tripline"><span>${t.live ? "Live trip" : "Next trip"}</span><b>${clock(t.stops[0].time, t.stops[0].tz)}</b> ${esc(t.stops[0].name)} → <b>${clock(t.stops[t.stops.length - 1].time, t.stops[0].tz)}</b> ${esc(t.stops[t.stops.length - 1].name)}</div>` : "")
       + lineDiagramHtml(l, d.lay, d.meet, { expanded: s.expanded, here: s.at, onTrip: t ? new Set(t.stops.map(x => x.key)) : null })
       + (t ? summaryHtml(t.stops, s.back) : "");
   },
-  after(s) { if (s.data?.lay) requestAnimationFrame(() => drawLineDiagram(registry.get(s.key), s.data.lay, s.data.meet)); },
+  after(s) {
+    if (s.data?.lay && s.ltab !== "tt") requestAnimationFrame(() => drawLineDiagram(registry.get(s.key), s.data.lay, s.data.meet));
+    if (s.ltab === "tt" && s.tt && !s.ttScrolled) { s.ttScrolled = true; requestAnimationFrame(() => body.querySelector(".tt .next")?.scrollIntoView({ block: "center" })); }
+  },
 };
+
+/* ------------------------------ A line's timetable at one station, today ------------------------------ */
+
+function ttRowIndex(s, lay) {
+  if (s.ttRow != null) return s.ttRow;
+  const i = s.at ? lay.rows.findIndex(r => r.sk === s.at || r.key === s.at) : -1;
+  return i >= 0 ? i : 0;
+}
+/** Today's departures of this line at a station, by direction (several pages of the stop's departures). */
+async function loadTimetable(s, l, row) {
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  const end = day.getTime() + 864e5 + 3 * 36e5; // services after midnight still count for today
+  const mine = [];
+  let cursor = null, time = day.toISOString();
+  for (let page = 0; page < 8; page++) {
+    const r = await api.departures(cursor ? { stopId: row.sk, n: 250, pageCursor: cursor } : { stopId: row.sk, n: 250, time });
+    for (const st of r.stopTimes) if (lineOfStopTime(st) === l && st.place.departure) mine.push(st);
+    const last = r.stopTimes.at(-1);
+    cursor = r.nextPageCursor;
+    if (!cursor || !last || Date.parse(last.place.departure || last.place.arrival) > end) break;
+  }
+  const dirs = new Map();
+  for (const st of mine) {
+    const iso = st.place.departure;
+    if (Date.parse(iso) > end) continue;
+    const to = st.headsign || st.tripTo?.name || "—";
+    (dirs.get(to) || dirs.set(to, []).get(to)).push({ iso, sched: st.place.scheduledDeparture, rt: st.realTime, cancelled: st.cancelled || st.tripCancelled, tripId: st.tripId, tz: st.place.tz });
+  }
+  return [...dirs].map(([to, list]) => ({ to, list: list.sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso)) })).sort((a, b) => b.list.length - a.list.length);
+}
+function timetableHtml(s, l, lay) {
+  const i = ttRowIndex(s, lay), row = lay.rows[i];
+  if (!s.tt && !s.tt$ && !s.ttErr) { s.ttFor = i; load(s, "tt", () => loadTimetable(s, l, row)); }
+  const pick = `<label class="ttpick"><span>${icon("stop", "s")}</span><select data-tt>${lay.rows.map((r, k) => `<option value="${k}"${k === i ? " selected" : ""}>${esc(r.name)}</option>`).join("")}</select>${icon("caret-down", "s")}</label>`;
+  if (s.ttErr) return pick + failed(s.ttErr);
+  if (!s.tt) return pick + loading(6);
+  if (!s.tt.length) return pick + `<div class="card muted">No more departures of this line from ${esc(row.name)} today.</div>`;
+  const now = Date.now();
+  let nextSet = false;
+  return pick + s.tt.map(dir => {
+    const hours = new Map();
+    for (const x of dir.list) { const h = clock(x.sched || x.iso, x.tz).slice(0, 2); (hours.get(h) || hours.set(h, []).get(h)).push(x); }
+    return `<div class="card tt"><div class="tthead">${badge(l)}<b>${esc(dir.to)}</b><small>${dir.list.length} today</small></div>
+      ${[...hours].map(([h, xs]) => `<div class="ttrow"><span class="tth">${h}</span><span class="ttm">${xs.map(x => {
+        const t = Date.parse(x.iso), past = t < now - 60000, late = x.sched && t - Date.parse(x.sched) >= 120000;
+        const next = !past && !x.cancelled && !nextSet; if (next) nextSet = true;
+        const cls = [past && "past", next && "next", late && "late", x.cancelled && "cancelled", x.rt && "rt"].filter(Boolean).join(" ");
+        const title = x.cancelled ? "Cancelled" : late ? `Expected ${clock(x.iso, x.tz)}` : x.rt ? "Live" : "Scheduled";
+        return `<button class="${cls}" data-line="${esc(l.key)}" data-trip="${esc(x.tripId)}" title="${title}">${clock(x.sched || x.iso, x.tz).slice(3)}${late ? `<i>+${Math.round((t - Date.parse(x.sched)) / 60000)}</i>` : ""}</button>`;
+      }).join("")}</span></div>`).join("")}</div>`;
+  }).join("") + `<p class="sub">Times at ${esc(row.name)} · tap a time for that trip${s.tt.some(d => d.list.some(x => x.rt)) ? " · live where marked" : ""}.</p>`;
+}
+document.addEventListener("change", e => {
+  const sel = e.target.closest("[data-tt]");
+  if (!sel) return;
+  const s = screen();
+  if (s.t !== "line") return;
+  s.ttRow = +sel.value; s.tt = null; s.ttErr = null; s.ttScrolled = false;
+  refresh(s);
+});
 
 async function tripData(tripId) {
   const t = await api.trip(tripId);
@@ -596,6 +665,7 @@ function flightHtml(f, s) {
   const dir = here(f.origin) ? "Departs from here" : here(f.destination) ? "Arrives here" : "Doesn't use this airport";
   return `<div class="fcard"><div class="fhead">${BOARD_FLAP(f.callsign_iata || f.callsign)}<span>${esc(f.airline?.name || "")}</span></div>
     <div class="froute">${ap(f.origin, "From")}<span class="farrow">${icon("plane", "s")}</span>${ap(f.destination, "To")}</div>
+    ${FLIGHTS_RELAY ? `<button class="trackbtn" data-act="track-flight" data-cs="${esc(f.callsign_icao || f.callsign)}">${icon("plane", "s")}Track this flight live</button>` : ""}
     <p class="fnote">${dir} · callsign ${esc(f.callsign_icao || f.callsign)} · route data <a href="https://www.adsbdb.com" target="_blank" rel="noopener">adsbdb</a></p></div>`;
 }
 VIEWS.airport = {
@@ -649,7 +719,7 @@ VIEWS.airport = {
         <button class="circ primary" data-act="dir-place"><span>${icon("dir")}</span>Directions</button>
         <button class="circ" data-act="save-place" aria-pressed="${isSaved}"><span>${icon(isSaved ? "heart" : "save")}</span>${isSaved ? "Saved" : "Save"}</button>
         <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
-        <button class="circ" data-soon="Live flights on the map"><span>${icon("plane")}</span>Flights</button></div>
+        <button class="circ" data-act="planes-here" aria-pressed="${settings.flights}"><span>${icon("plane")}</span>Flights</button></div>
       <div class="tabs" role="tablist">${tabs.map(([k, label]) => `<button role="tab" data-ptab="${k}" aria-selected="${s.tab === k}">${label}</button>`).join("")}</div>
       ${body}`;
   },
@@ -740,6 +810,42 @@ document.addEventListener("submit", e => {
   load(s, "flight", () => lookupFlight(q));
 });
 
+
+/* ============================== A flight, tracked live ============================== */
+
+VIEWS.flight = {
+  sheet: "half",
+  enter(s) {
+    mapFor({});
+    if (!planes.tracked || (s.hex ? planes.tracked.hex !== s.hex : planes.tracked.cs !== s.cs)) planes.track({ hex: s.hex, cs: s.cs });
+    applyLayers();
+  },
+  html(s) {
+    const t = planes.tracked, a = t?.aircraft, r = t?.route;
+    if (!FLIGHTS_RELAY) return `<div class="card muted">Live flights need the flights relay.</div>`;
+    const code = r?.flight || a?.flight || s.cs || s.hex || "";
+    const head = `<header class="title"><div class="fhead">${BOARD_FLAP(String(code).slice(0, 8))}<span>${esc(r?.airline || "")}</span></div>
+      <p>${a ? (t.lost ? "Signal lost · last seen " : "Live · updated ") + Math.max(0, Math.round((Date.now() - (t.at || Date.now())) / 1000)) + " s ago" : t?.lost ? "Not found in the air right now" : "Finding the aircraft…"}</p></header>`;
+    if (!a) return head + (t?.lost > 1 ? `<div class="card muted">This aircraft isn't sending its position right now (it may be on the ground or out of receiver range).</div>` : loading(4));
+    // How far along: the share of the way from origin to destination, as the crow flies.
+    let prog = null;
+    if (r?.from?.lat != null && r?.to?.lat != null) { const d1 = metresBetween([r.from.lon, r.from.lat], [a.lon, a.lat]), d2 = metresBetween([a.lon, a.lat], [r.to.lon, r.to.lat]); prog = { p: d1 / (d1 + d2), left: d2 }; }
+    const end = (c, label) => `<div class="fend"><small>${label}</small><b>${esc(c?.iata || c?.icao || "—")}</b><span>${esc(c?.city || c?.name || "")}</span></div>`;
+    const route = r ? `<div class="fcard"><div class="froute">${end(r.from, "From")}<span class="farrow">${icon("plane", "s")}</span>${end(r.to, "To")}</div>
+      ${prog ? `<div class="fprog"><i style="width:${(prog.p * 100).toFixed(1)}%"></i><span style="left:${(prog.p * 100).toFixed(1)}%">${icon("plane", "xs")}</span></div><p class="fnote">${Math.round(prog.left / 1000).toLocaleString("en")} km to go${a.gs > 50 ? ` · about ${duration(prog.left / (a.gs * 0.5144))} at this speed` : ""}</p>` : ""}</div>` : "";
+    const stat = (ic, label, v) => `<div class="irow">${icon(ic, "s")}<span><small>${label}</small><b>${esc(v)}</b></span></div>`;
+    return head + `<div class="circs">
+        <button class="circ primary" data-act="follow" aria-pressed="${!!t.follow}"><span>${icon("loc-fix")}</span>${t.follow ? "Following" : "Follow"}</button>
+        <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
+        <button class="circ" data-act="stop-track"><span>${icon("close")}</span>Stop</button></div>
+      ${route}
+      <div class="card list info">
+        ${stat("terrain", "Altitude", fmt.alt(a))}${stat("wind", "Speed", fmt.speed(a))}${stat("compass", "Heading", fmt.heading(a))}${stat("timeline", "Climb", fmt.vs(a))}
+        ${stat("plane", "Aircraft", [a.desc || a.type, a.reg].filter(Boolean).join(" · ") || "—")}${a.squawk ? stat("info", "Squawk", a.squawk) : ""}</div>
+      <p class="sub">Positions from aircraft signals (adsb.lol) · route from adsbdb.</p>`;
+  },
+};
+
 /* ============================== Menu ============================== */
 
 VIEWS.menu = {
@@ -768,6 +874,8 @@ function applyLayers() {
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
   for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
+  for (const id of ["planes", "plane-trail"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.flights || !!planes.tracked));
+  planes.on = settings.flights; planes.render(); if (settings.flights) planes.update();
   sea.on = settings.sea; sea.update();
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
@@ -786,6 +894,7 @@ function renderLayers() {
     ${sw(settings.places, 'data-layer="places"', "Places", "Shops, food, culture, services", "pin")}
     ${sw(settings.sea, 'data-layer="sea"', "Sea", "Sea marks, ferries, marinas, lighthouses, Blue Flags", "ferry")}
     ${sw(settings.ski, 'data-layer="ski"', "Skiing", "Ski resorts, runs by difficulty, lifts, trails", "terrain")}
+    ${sw(settings.flights, 'data-layer="flights"', "Flights", "Aircraft in the air now; tap one to track it", "plane")}
     ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
     ${soonRow("traffic", "Traffic", "Road speeds and closures")}
     ${soonRow("cloud", "Weather", "Rain radar and forecasts")}
@@ -1045,12 +1154,14 @@ function toggleSaved(s, sub) {
 function rerenderSettings() { if (screen().t === "settings") refresh(screen()); }
 
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-act],[data-line],[data-stop],[data-mode],[data-trip-mode],[data-itin],[data-open],[data-more],[data-result],[data-saved],[data-when],[data-set],[data-theme-set],[data-only],[data-soon],[data-ptab],[data-layer]");
+  const el = e.target.closest("[data-act],[data-line],[data-stop],[data-mode],[data-trip-mode],[data-itin],[data-open],[data-more],[data-result],[data-saved],[data-when],[data-set],[data-theme-set],[data-only],[data-soon],[data-ptab],[data-ltab],[data-layer]");
   if (!el || el.disabled) return;
   const d = el.dataset, s = screen();
   if (d.soon) return toast(`${d.soon}: coming soon.`);
+  if (d.ltab) { s.ltab = d.ltab; return refresh(s); }
   if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "flights") { settings.flights = !settings.flights; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "ski") { settings.ski = !settings.ski; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "sea") { settings.sea = !settings.sea; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "places") { settings.places = !settings.places; saveSettings(); applyLayers(); return renderLayers(); }
@@ -1079,6 +1190,10 @@ document.addEventListener("click", async e => {
       return;
     }
     case "dir-stop": T.to = { name: s.name, sub: "Stop", lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "plan" });
+    case "planes-here": settings.flights = true; saveSettings(); applyLayers(); map.flyTo({ center: [s.lon, s.lat], zoom: 9, padding: padding(), duration: 800 }); return toast("Showing aircraft around the airport. Tap one to track it.");
+    case "track-flight": return go({ t: "flight", cs: el.dataset.cs });
+    case "follow": planes.setFollow(!planes.tracked?.follow); return;
+    case "stop-track": return back();
     case "dir-place": T.to = { name: s.name, sub: s.sub, lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "plan" });
     case "save-stop": return toggleSaved(s, "Stop");
     case "save-place": return toggleSaved(s, s.sub);
@@ -1152,6 +1267,8 @@ net.on(debounce(() => {
 const tapBox = (p, r = 8) => [[p.x - r, p.y - r], [p.x + r, p.y + r]];
 map.on("click", e => {
   closeOmni();
+  const plane = map.getLayer("planes") && map.queryRenderedFeatures(tapBox(e.point, 12), { layers: ["planes"] })[0];
+  if (plane) return go({ t: "flight", hex: plane.properties.hex, cs: plane.properties.flight });
   const veh = map.getLayer("vehicles") && map.queryRenderedFeatures(tapBox(e.point, 10), { layers: ["vehicles"] })[0];
   if (veh?.properties.key && registry.get(veh.properties.key)) return go({ t: "line", key: veh.properties.key, tripId: veh.properties.trip });
   const st = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations"] });
@@ -1195,7 +1312,7 @@ map.on("mousemove", e => {
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
     if (!map.getLayer("stations")) return;
-    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "poi-major", "poi-minor", ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
+    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "planes", "poi-major", "poi-minor", ...SEA_CLICK_LAYERS, ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
   });
 });
 

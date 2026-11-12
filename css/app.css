@@ -481,3 +481,41 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 .info.hours b { font-weight: 500; }
 .info.hours + .card { margin-top: 10px; }
 a.circ { text-decoration: none; color: inherit; }
+
+/* Tabs: labels centred in their segment, never running into the next one. */
+.tabs button { display: grid; place-items: center; text-align: center; min-width: 0; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fids .ftitle { white-space: nowrap; }
+.fids .finfo { flex: 0 1 auto; overflow: hidden; }
+@media (max-width: 420px) { .fids.small .finfo span:nth-child(2) { display: none; } }
+
+/* A tracked flight: progress along its route; the track button in a flight lookup. */
+.fprog { position: relative; height: 4px; border-radius: 2px; background: var(--chip-2); margin: 16px 8px 4px; }
+.fprog i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: #F28C28; }
+.fprog span { position: absolute; top: 50%; transform: translate(-50%, -50%) rotate(90deg); display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 2px #F28C28; }
+.fprog span .ic { width: 12px; height: 12px; fill: #F28C28; color: #F28C28; }
+.title .fhead { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+.title .fhead > span:last-child { color: var(--muted); font-size: 13.5px; font-weight: 600; }
+.trackbtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 42px; margin-top: 12px; border-radius: 12px; background: var(--fg); color: var(--bg); font-weight: 600; font-size: 13.5px; }
+.trackbtn .ic { fill: currentColor; }
+
+/* A line's timetable: pick a station; per direction, hours down the side and the minutes across. */
+.ttpick { position: relative; display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 14px; margin-bottom: 12px; border-radius: 14px; background: var(--chip); }
+.ttpick select { flex: 1; min-width: 0; appearance: none; -webkit-appearance: none; border: 0; background: none; font: inherit; font-weight: 600; color: inherit; outline: none; cursor: pointer; padding-right: 22px; }
+.ttpick > .ic:last-child { position: absolute; right: 14px; pointer-events: none; color: var(--muted); }
+.tt { padding-bottom: 6px; }
+.tt + .tt { margin-top: 12px; }
+.tthead { display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+.tthead b { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tthead small { color: var(--muted); font-size: 12px; }
+.ttrow { display: flex; align-items: flex-start; gap: 12px; padding: 6px 14px; }
+.ttrow + .ttrow { border-top: 1px solid var(--line); }
+.tth { flex: none; width: 26px; font-family: var(--mono); font-weight: 700; font-size: 14px; line-height: 28px; }
+.ttm { display: flex; flex-wrap: wrap; gap: 4px; }
+.ttm button { position: relative; min-width: 36px; height: 28px; padding: 0 6px; border-radius: 8px; font-family: var(--mono); font-size: 13px; text-align: center; }
+.ttm button:hover { background: var(--hover); }
+.ttm button.past { color: var(--faint); }
+.ttm button.next { background: var(--fg); color: var(--bg); font-weight: 700; }
+.ttm button.rt:not(.past)::after { content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: #1E8E3E; }
+.ttm button.late i { font-style: normal; font-size: 10px; color: #D93025; margin-left: 2px; }
+.ttm button.next.late i { color: #FFB4A9; }
+.ttm button.cancelled { text-decoration: line-through; color: #D93025; }
