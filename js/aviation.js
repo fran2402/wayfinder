@@ -176,3 +176,15 @@ export async function lookupFlight(code) {
   const r = (await res.json()).response;
   return typeof r === "object" ? r.flightroute : null;
 }
+
+/** Your flights relay (worker/flights.js deployed on Cloudflare), e.g. "https://wayfinder-flights.you.workers.dev". Empty: boards say "Soon". */
+export const FLIGHTS_RELAY = "";
+
+/** Departures and arrivals happening now around an airport, from the relay. */
+export async function airportBoard({ lat, lon, iata, icao }) {
+  const q = new URLSearchParams({ lat: lat.toFixed(4), lon: lon.toFixed(4), iata: iata || "", icao: icao || "" });
+  const res = await fetch(`${FLIGHTS_RELAY.replace(/\/$/, "")}/airport?${q}`);
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || "flights " + res.status);
+  return d;
+}

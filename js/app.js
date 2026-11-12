@@ -11,7 +11,7 @@
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
 import { SeaMarks, preloadSeaIcons, SEA_LAYER_IDS } from "./maritime.js";
-import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween } from "./aviation.js";
+import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween, FLIGHTS_RELAY, airportBoard } from "./aviation.js";
 import { preloadStreetIcons } from "./streets.js";
 import { attach as attachIcons } from "./icons.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
@@ -577,6 +577,10 @@ VIEWS.airport = {
     mapFor({});
     map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13.3), padding: padding(), duration: 700 });
     map.once("idle", () => { s.runways = runwaysIn(map, [s.lon, s.lat], 7000).sort((a, b) => b.length - a.length); refresh(s); });
+    if (FLIGHTS_RELAY) {
+      const tick = () => { if (screen() !== s) return clearInterval(s.timer); s.board$ = false; load(s, "board", () => airportBoard(s)); };
+      clearInterval(s.timer); s.timer = setInterval(tick, 30000); tick();
+    }
     load(s, "near", async () => {
       const d = await api.departures({ center: [s.lon, s.lat], radius: 1500, n: 60 });
       return { deps: departures(d.stopTimes), stations: stationsFrom(d.stopTimes, [s.lon, s.lat]).slice(0, 4) };
@@ -600,12 +604,21 @@ VIEWS.airport = {
         ${s.near?.stations?.length ? `${section("Getting there by public transport")}<div class="card list">${s.near.stations.map(st => stationRow(st, distance(st.d))).join("")}</div>`
           : s.near && !s.near.stations.length ? "" : s.nearErr ? "" : loading(2)}`;
     } else {
-      const dep = s.tab === "departures";
+      const dep = s.tab === "departures", rows = s.board?.[dep ? "departures" : "arrivals"];
+      const other = f => (dep ? f.to : f.from) || {};
+      const status = f => f.status + (f.etaMin && f.status !== "Landed" ? ` · ${f.etaMin} min` : f.alt > 0 ? ` · ${Math.round(f.alt / 100) * 100} ft` : "");
+      const live = FLIGHTS_RELAY && (rows || s.boardErr);
       body = `<div class="board">
-          <div class="bhead">${icon("plane", "s")}${BOARD_FLAP(dep ? "DEPARTURES" : "ARRIVALS")}</div>
-          <div class="brow bcols"><span>Time</span><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Gate</span></div>
+          <div class="bhead">${icon("plane", "s")}${BOARD_FLAP(dep ? "DEPARTURES" : "ARRIVALS")}${FLIGHTS_RELAY ? `<span class="blive">● Live</span>` : ""}</div>
+          ${FLIGHTS_RELAY ? `<div class="brow bcols b3"><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Status</span></div>
+            ${s.boardErr ? `<p class="bnote">Couldn't load flights (${esc(s.boardErr)}).</p>`
+              : !rows ? `<p class="bnote">Loading flights…</p>`
+              : !rows.length ? `<p class="bnote">No ${dep ? "departures" : "arrivals"} in the air or on the move right now.</p>`
+              : rows.slice(0, 14).map(f => `<div class="brow b3"><span>${BOARD_FLAP(String(f.flight).slice(0, 7))}</span><span class="bcity"><b>${esc(other(f).city || other(f).name || "—")}</b><small>${esc(other(f).iata || other(f).icao || "")}${f.airline ? " · " + esc(f.airline) : ""}</small></span><span class="bstat">${esc(status(f))}</span></div>`).join("")}
+            <p class="bnote small">Flights moving now, from aircraft signals (adsb.lol) and routes (adsbdb). Updates every 30 s.</p>`
+          : `<div class="brow bcols"><span>Time</span><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Gate</span></div>
           ${[0, 1, 2].map(() => `<div class="brow ghost"><span>${BOARD_FLAP("--:--")}</span><span>${BOARD_FLAP("------")}</span><span>${BOARD_FLAP("--------")}</span><span>${BOARD_FLAP("--")}</span></div>`).join("")}
-          <p class="bnote">Live ${dep ? "departures" : "arrivals"} are coming ${soon()}</p></div>
+          <p class="bnote">Live ${dep ? "departures" : "arrivals"} are coming ${soon()}</p>`}</div>
         ${section("Look up a flight")}
         <form class="flookup" data-flight-form><input name="f" value="${esc(s.flightQ || "")}" placeholder="Flight number, e.g. VY1234" autocomplete="off" autocapitalize="characters" spellcheck="false"><button>${icon("search", "s")}</button></form>
         ${s.flight$ ? loading(2) : s.flightErr ? failed(s.flightErr) : s.flight !== undefined ? flightHtml(s.flight, s) : ""}`;

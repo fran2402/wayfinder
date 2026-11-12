@@ -383,3 +383,10 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 .fcard .fend span { display: block; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fcard .farrow .ic { transform: rotate(90deg); color: var(--muted); fill: var(--muted); }
 .fcard .fnote { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
+.board .b3 { grid-template-columns: 6.6em 1fr auto; }
+.board .bcity { min-width: 0; font-family: var(--sans); }
+.board .bcity b { display: block; color: #F5F5F5; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board .bcity small { display: block; color: #8A8A8A; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board .bstat { text-align: right; font-size: 11.5px; color: #F9C80E; }
+.board .blive { margin-left: auto; font-family: var(--sans); font-size: 11.5px; color: #34A853; }
+.board .bnote.small { font-size: 11.5px; color: #8A8A8A; }
