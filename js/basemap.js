@@ -62,38 +62,40 @@ export function buildStyle(theme) {
       // Elevation (Terrarium tiles, AWS Open Data): drives the height colours and the hill shading.
       dem: { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 13,
         attribution: 'Terrain <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen / AWS</a>' },
+      // The same tiles carry the sea floor only up to zoom 8 (deeper zooms say 0 at sea), so depth always uses those, enlarged.
+      bathy: { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 8 },
       omt: { type: "vector", url: "https://tiles.openfreemap.org/planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
     layers: [
       { id: "land", type: "background", paint: { "background-color": t.land } },
       // The ground coloured by height in steps (hypsometric tints): green lowland to white peaks. No shading.
-      { id: "relief", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.relief], "color-relief-opacity": z(4, 1, 12, 0.85, 16, 0.55) } },
+      { id: "relief", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.relief], "color-relief-opacity": 1 } },
       { id: "landuse-residential", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 9, filter: cls("residential", "suburb", "neighbourhood"),
         paint: { "fill-color": t.residential, "fill-opacity": z(9, 0.5, 12, 1) } },
       { id: "landuse-industrial", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("industrial", "commercial", "retail", "railway"),
         paint: { "fill-color": t.industrial } },
       // Natural ground: sand and beaches, shrub and heath, farmland, wetland, ice and rock.
       { id: "landcover-farm", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 8, filter: cls("farmland"),
-        paint: { "fill-color": ["match", ["get", "subclass"], ...Object.entries(t.crops).flat(), t.crops.farmland], "fill-opacity": z(8, 0.45, 13, 0.8) } },
+        paint: { "fill-color": ["match", ["get", "subclass"], ...Object.entries(t.crops).flat(), t.crops.farmland], "fill-opacity": 0.5 } },
       { id: "landcover-sand", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("sand"), paint: { "fill-color": t.sand } },
       { id: "landcover-shrub", type: "fill", source: "omt", "source-layer": "landcover", filter: ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false], paint: { "fill-color": t.shrub, "fill-opacity": 0.6 } },
       { id: "landcover-wetland", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wetland"), paint: { "fill-color": t.wetland } },
       { id: "landcover-ice", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("ice"), paint: { "fill-color": t.ice } },
       { id: "landcover-rock", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("rock"), paint: { "fill-color": t.rock } },
-      // Vegetation.
+      // Vegetation: see-through tints over the height colours, so a forest high up looks different from one low down.
       { id: "landcover-wood", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wood", "forest"), paint: { "fill-color": t.wood, "fill-opacity": 0.45 } },
       { id: "landcover-grass", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 9, filter: ["all", cls("grass", "park", "meadow"), ["!", ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false]]],
         paint: { "fill-color": ["match", ["get", "subclass"], "meadow", t.crops.meadow, "allotments", t.crops.allotments, t.grass], "fill-opacity": 0.5 } },
       { id: "park-reserve", type: "fill", source: "omt", "source-layer": "park", filter: cls("nature_reserve", "national_park", "protected_area"), paint: { "fill-color": t.reserve, "fill-opacity": 0.35 } },
-      { id: "park", type: "fill", source: "omt", "source-layer": "park", filter: ["!", cls("nature_reserve", "national_park", "protected_area")], paint: { "fill-color": t.park } },
+      { id: "park", type: "fill", source: "omt", "source-layer": "park", filter: ["!", cls("nature_reserve", "national_park", "protected_area")], paint: { "fill-color": t.park, "fill-opacity": 0.55 } },
       { id: "landuse-green", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("cemetery", "pitch", "playground", "garden", "stadium"),
-        paint: { "fill-color": t.park, "fill-opacity": 0.8 } },
+        paint: { "fill-color": t.park, "fill-opacity": 0.5 } },
       // Medical.
       { id: "landuse-medical", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 12, filter: cls("hospital"), paint: { "fill-color": t.medical } },
       { id: "water", type: "fill", source: "omt", "source-layer": "water", filter: ["!=", ["get", "brunnel"], "tunnel"], paint: { "fill-color": t.water } },
       // How deep the sea is (the elevation tiles carry the sea floor too).
-      { id: "depth", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.depth], "color-relief-opacity": 1 } },
+      { id: "depth", type: "color-relief", source: "bathy", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.depth], "color-relief-opacity": 1 } },
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: notTunnel,
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },
