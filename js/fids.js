@@ -4,7 +4,7 @@
 
 import { esc } from "./util.js";
 
-const SIZES = { small: { flight: 7, place: 9, gate: 3 }, big: { flight: 7, place: 15, gate: 3 } };
+const SIZES = { small: { flight: 7, place: 9, gate: 3 }, big: { flight: 7, place: 11, gate: 3 } };
 
 /** A run of flaps, padded with blank flaps to `n`. */
 function flaps(str, n, cls = "") {
@@ -62,11 +62,12 @@ export function boardHtml(rows, meta, size = "small") {
           ${f.airline ? `<div><small>Airline</small><b>${esc(f.airline)}</b></div>` : ""}
           ${f.aircraft ? `<div><small>Aircraft</small><b>${esc(f.aircraft)}</b></div>` : ""}
           <div><small>${dep ? "To" : "From"}</small><b>${esc([f.city, f.code].filter(Boolean).join(" · ") || "—")}</b></div></div>` : "";
-      return `<button class="frow${open ? " open" : ""}${f.past ? " past" : ""}" data-fids="${i}"${f.next ? ' data-next="1"' : ""}>
+      const now = meta.split > 0 && i === meta.split ? `<div class="fnow"><span>NOW</span></div>` : "";
+      return `${now}<button class="frow${open ? " open" : ""}${f.past ? " past" : ""}" data-fids="${i}"${f.next ? ' data-next="1"' : ""}>
         ${flaps((f.time || "").replace(":", ""), 4, tcls)}${flaps(f.flight, Z.flight)}${flaps(f.city || f.code || "", Z.place)}${flaps(f.gate || (meta.mode === "day" ? "" : "---"), Z.gate)}
         <span class="flight ${lt}"></span><span class="fchev">›</span></button>${details}`;
     }).join("");
-  return `<div class="fids ${size}">${head}${cols}<div class="fbody">${body}</div>${meta.foot ? `<p class="ffoot">${meta.foot}</p>` : ""}</div>`;
+  return `<div class="fids ${size}" data-key="${esc(meta.key || "")}">${head}${cols}<div class="fbody">${body}</div>${meta.foot ? `<p class="ffoot">${meta.foot}</p>` : ""}</div>`;
 }
 
 /** Mark which flights are past and which is next (to scroll to). */

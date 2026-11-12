@@ -14,6 +14,7 @@ import { SeaMarks, preloadSeaIcons, SEA_LAYER_IDS } from "./maritime.js";
 import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween, FLIGHTS_RELAY, airportBoard, airportSchedule } from "./aviation.js";
 import { boardHtml, liveRows, markNow } from "./fids.js";
 import { preloadStreetIcons } from "./streets.js";
+import { preloadSkiIcons, SKI_LAYER_IDS } from "./ski.js";
 import { attach as attachIcons } from "./icons.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
@@ -23,7 +24,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -53,7 +54,7 @@ map.on("styleimagemissing", e => {
   map.addImage(e.id, { width: 24, height: 24, data: g.getImageData(0, 0, 24, 24).data }, { pixelRatio: 2 });
 });
 attachIcons(map);
-preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons();
+preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons();
 
 const net = new Network(map);
 const sea = new SeaMarks(map);
@@ -72,7 +73,14 @@ function writeViewToUrl() {
   params.unshift(`map=${map.getZoom().toFixed(2)}/${c.lat.toFixed(5)}/${c.lng.toFixed(5)}`);
   history.replaceState(history.state, "", location.pathname + location.search + "#" + params.join("&"));
 }
-addEventListener("popstate", () => setTimeout(writeViewToUrl, 0));
+let popped = false;
+addEventListener("popstate", e => { if (!e.state?.wf) return; popped = true; setTimeout(() => { popped = false; writeViewToUrl(); }, 0); });
+// A new link pasted into the address bar still moves the map.
+addEventListener("hashchange", () => {
+  if (popped) return;
+  const m = /(?:^|&)map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)/.exec(location.hash.slice(1));
+  if (m) map.jumpTo({ zoom: +m[1], center: [+m[3], +m[2]] });
+});
 map.on("moveend", () => {
   writeViewToUrl();
   net.update();
@@ -638,24 +646,36 @@ VIEWS.airport = {
       ${body}`;
   },
 };
-/** The board for the open tab: today's timetable if the relay has one, else the flights moving now. */
-function fidsFor(s, size) {
-  const dir = s.tab === "arrivals" ? "arrivals" : "departures", dep = dir === "departures";
-  const sch = s.sched?.[dir];
-  const meta = { dir, code: s.iata || s.icao, name: s.name, open: s.fOpen?.[dir], tz: sch?.tz, country: sch?.airport?.country || s.country };
+/**
+ * A board. In the panel ("small"): the last 3 flights that left (or landed), then the next 7.
+ * Full screen ("big"): the whole day. Today's timetable if the relay has one, else the flights moving now.
+ */
+function fidsFor(s, size, dir = s.tab === "arrivals" ? "arrivals" : "departures") {
+  const dep = dir === "departures", sch = s.sched?.[dir], key = dir + ":" + size;
+  const meta = { dir, code: s.iata || s.icao, name: s.name, open: s.fOpen?.[key], key, tz: sch?.tz, country: sch?.airport?.country || s.country };
+  const pick = (rows, isPast) => {
+    if (!rows || size === "big") return { rows, split: rows ? rows.findIndex(r => !isPast(r)) : -1 };
+    const past = rows.filter(isPast), next = rows.filter(r => !isPast(r));
+    const shown = [...past.slice(-3), ...next.slice(0, 7)];
+    return { rows: shown, split: Math.min(past.length, 3) };
+  };
   if (!FLIGHTS_RELAY) return boardHtml([], { ...meta, mode: "live", note: `Live ${dir} are coming.` }, size);
-  if (sch) return boardHtml(markNow(sch.flights, sch.tz), { ...meta, mode: "day", note: `No ${dir} listed today.`,
-    foot: `Today's timetable · times are local · updated every 5 min` }, size);
-  const loadingDay = s.schedLoading?.[dir];
-  if (s.schedNone || s.schedErr?.[dir] || !loadingDay) {
-    const rows = s.board ? liveRows(s.board, dep) : s.boardErr ? [] : null;
-    return boardHtml(rows, { ...meta, mode: "live", note: s.boardErr ? `Couldn't load flights (${esc(s.boardErr)}).` : `No ${dir} on the move right now.`,
-      foot: `Flights moving now (aircraft signals: adsb.lol · routes: adsbdb).${s.schedNone ? " Today's full timetable with gates needs a schedule key in the relay." : ""}` }, size);
+  if (sch) {
+    const { rows, split } = pick(markNow(sch.flights, sch.tz), f => f.past);
+    return boardHtml(rows, { ...meta, split, mode: "day", note: `No ${dir} listed today.`, foot: size === "big" ? "Today's timetable · local times · updated every 5 min" : "" }, size);
+  }
+  if (s.schedNone || s.schedErr?.[dir] || s.schedLoading?.[dir] !== "busy") {
+    // Moving now: the most recent ones have left (or landed) — nearest first; then the ones about to.
+    let live = s.board ? liveRows(s.board, dep) : s.boardErr ? [] : null;
+    const gone = f => dep ? !/taxiing|taking off/i.test(f.status) : /landed/i.test(f.status);
+    if (live) { live = [...live.filter(gone).reverse(), ...live.filter(f => !gone(f))]; live.forEach(f => { f.past = gone(f); f.next = false; }); const nx = live.find(f => !f.past); if (nx) nx.next = true; }
+    const { rows, split } = pick(live, gone);
+    return boardHtml(rows, { ...meta, split, mode: "live", note: s.boardErr ? `Couldn't load flights (${esc(s.boardErr)}).` : `No ${dir} on the move right now.`,
+      foot: size === "big" ? `Flights moving now (aircraft signals: adsb.lol · routes: adsbdb).${s.schedNone ? " Today's full timetable with gates needs a schedule key in the relay." : ""}` : "" }, size);
   }
   return boardHtml(null, { ...meta, mode: "day", note: "Loading today's flights…" }, size);
 }
-async function loadSchedule(s) {
-  const dir = s.tab === "arrivals" ? "arrivals" : "departures";
+async function loadSchedule(s, dir = s.tab === "arrivals" ? "arrivals" : "departures") {
   if (s.schedNone || s.schedLoading?.[dir] === "busy") return;
   (s.schedLoading ||= {})[dir] = "busy";
   try {
@@ -664,29 +684,43 @@ async function loadSchedule(s) {
   } catch (e) { (s.schedErr ||= {})[dir] = e.message; }
   s.schedLoading[dir] = "done";
   refresh(s); renderFull(s);
-  if (s.sched?.[dir] && !s.scrolled?.[dir]) { (s.scrolled ||= {})[dir] = 1; requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); }
+  if (s.sched?.[dir] && !s.scrolled?.[dir]) { (s.scrolled ||= {})[dir] = 1; requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "nearest" })); }
 }
-// Tap a flight to open its details; the full-screen board.
+// The full-screen board: a pop-up over the dimmed map, departures and arrivals side by side.
 function renderFull(s) {
   const el = $("#fidsfull");
   if (!el || screen() !== s) return el?.remove();
-  el.querySelector(".fidswrap").innerHTML = fidsFor(s, "big");
+  const wrap = el.querySelector(".fidswrap"), keep = [...wrap.querySelectorAll(".fbody")].map(b => b.scrollTop);
+  wrap.innerHTML = fidsFor(s, "big", "departures") + fidsFor(s, "big", "arrivals");
+  wrap.querySelectorAll(".fbody").forEach((b, i) => {
+    const dir = i ? "arrivals" : "departures", n = b.querySelector("[data-next]");
+    // The first time a board has flights, start at the next one; after that, stay where you scrolled.
+    if (n && !s.fullScrolled?.[dir]) { (s.fullScrolled ||= {})[dir] = 1; b.scrollTop = n.offsetTop - b.offsetTop - 60; }
+    else if (keep[i] != null) b.scrollTop = keep[i];
+  });
 }
+function closeFull() { $("#fidsfull")?.remove(); }
 document.addEventListener("click", e => {
   const row = e.target.closest("[data-fids]"), act = e.target.closest("[data-fids-act]");
+  if (e.target.classList?.contains("fidsfull")) return closeFull(); // a tap on the dimmed map closes it
   const s = screen();
   if (s.t !== "airport" || (!row && !act)) return;
-  const dir = s.tab === "arrivals" ? "arrivals" : "departures";
-  if (row) { const i = +row.dataset.fids; s.fOpen ||= {}; s.fOpen[dir] = s.fOpen[dir] === i ? null : i; s.keepScroll = true; refresh(s); renderFull(s); return; }
+  if (row) {
+    const k = row.closest(".fids").dataset.key, i = +row.dataset.fids;
+    s.fOpen ||= {}; s.fOpen[k] = s.fOpen[k] === i ? null : i;
+    refresh(s); renderFull(s); return;
+  }
   if (act.dataset.fidsAct === "full") {
     const el = document.createElement("div"); el.id = "fidsfull"; el.className = "fidsfull";
-    el.innerHTML = `<button class="fclose" data-fids-act="close" aria-label="Close">${icon("close")}</button><div class="fidswrap"></div>`;
-    document.body.append(el); renderFull(s);
-    el.querySelector("[data-next]")?.scrollIntoView({ block: "center" });
+    el.innerHTML = `<div class="fidsdlg"><button class="fclose" data-fids-act="close" aria-label="Close">${icon("close")}</button><div class="fidswrap"></div></div>`;
+    document.body.append(el);
+    for (const d of ["departures", "arrivals"]) if (!s.sched?.[d]) loadSchedule(s, d);
+    s.fullScrolled = {};
+    renderFull(s);
   }
-  if (act.dataset.fidsAct === "close") $("#fidsfull")?.remove();
+  if (act.dataset.fidsAct === "close") closeFull();
 });
-addEventListener("keydown", e => { if (e.key === "Escape") $("#fidsfull")?.remove(); });
+addEventListener("keydown", e => { if (e.key === "Escape") closeFull(); });
 
 document.addEventListener("submit", e => {
   const f = e.target.closest("[data-flight-form]");
@@ -725,7 +759,9 @@ function applyLayers() {
   for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
-  sea.on = settings.sea; if (settings.sea) { sea.apply(); sea.update(); }
+  for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
+  sea.sea = settings.sea; sea.ski = settings.ski; sea.on = settings.sea || settings.ski;
+  if (sea.on) { sea.apply(); sea.update(); } else sea.fallback();
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
 map.on("style.load", applyLayers);
@@ -742,6 +778,7 @@ function renderLayers() {
     ${sw(settings.vehicles, 'data-set="vehicles"', "Moving vehicles", "Every bus, tram and train, live", "bus")}
     ${sw(settings.places, 'data-layer="places"', "Places", "Shops, food, culture, services", "pin")}
     ${sw(settings.sea, 'data-layer="sea"', "Sea", "Sea marks, ferries, marinas, lighthouses, Blue Flags", "ferry")}
+    ${sw(settings.ski, 'data-layer="ski"', "Skiing", "Ski resorts, runs by difficulty, lifts, trails", "terrain")}
     ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
     ${soonRow("traffic", "Traffic", "Road speeds and closures")}
     ${soonRow("cloud", "Weather", "Rain radar and forecasts")}
@@ -1007,6 +1044,7 @@ document.addEventListener("click", async e => {
   if (d.soon) return toast(`${d.soon}: coming soon.`);
   if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "ski") { settings.ski = !settings.ski; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "sea") { settings.sea = !settings.sea; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "places") { settings.places = !settings.places; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.more) { s.expanded.add(d.more); return refresh(s); }

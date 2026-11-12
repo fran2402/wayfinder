@@ -20,18 +20,22 @@ async function blankPng() {
   return (await blank).slice(0);
 }
 
+const OMT = "https://tiles.openfreemap.org/planet";
+// The vector tiles' address (for the water mask under the sea depth).
+let tilejson = null;
+const omtTiles = () => (tilejson ||= fetch(OMT).then(r => r.json())).then(tj => tj.tiles[0]).catch(() => null);
+
 maplibregl.addProtocol("wfdepth", async params => {
   const [, theme, z, x, y] = params.url.match(/^wfdepth:\/\/(\w+)\/(\d+)\/(\d+)\/(\d+)/);
-  const buf = await ask({ kind: "depth", z: +z, x: +x, y: +y, palette: THEMES[theme].depth });
+  const buf = await ask({ kind: "depth", z: +z, x: +x, y: +y, palette: THEMES[theme].depth, omt: await omtTiles() });
   return { data: buf || await blankPng() };
 });
 
-const OMT = "https://tiles.openfreemap.org/planet";
 let omtMax = 14;
 maplibregl.addProtocol("wfomt", async params => {
   if (params.url === "wfomt://planet") {
     // The tile description: same tiles, but fetched through the smoothing worker.
-    const tj = await (await fetch(OMT)).json();
+    const tj = await (tilejson ||= fetch(OMT).then(r => r.json()));
     omtMax = tj.maxzoom ?? 14;
     return { data: { ...tj, tiles: tj.tiles.map(t => "wfomt://" + t.replace(/^https:\/\//, "")) } };
   }

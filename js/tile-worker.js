@@ -40,7 +40,52 @@ function parseColour(c) {
 }
 const cr = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
 
-async function depthTile(z, x, y, palette) {
+/**
+ * Where the water is in this tile, as an alpha mask: the base map's water polygons drawn into a canvas.
+ * Land below sea level (polders, the Dead Sea shore…) has a negative elevation too; without this it
+ * would be coloured like the sea.
+ */
+async function waterMask(template, z, x, y) {
+  if (!template) return null;
+  const zt = Math.min(z, 14), f = 2 ** (z - zt), tx = Math.floor(x / f), ty = Math.floor(y / f);
+  const res = await fetch(template.replace("{z}", zt).replace("{x}", tx).replace("{y}", ty));
+  if (!res.ok) return null;
+  const buf = new Uint8Array(await res.arrayBuffer()), r = new Reader(buf);
+  const c = new OffscreenCanvas(SIZE, SIZE), g = c.getContext("2d");
+  g.fillStyle = "#000";
+  while (r.pos < r.end) {
+    const [lf, lw] = r.field();
+    if (lf !== 3 || lw !== 2) { skipField(r, lw); continue; }
+    const [ls, le] = r.bytes();
+    let name = "", extent = 4096; const feats = [];
+    const lr = new Reader(buf, ls, le);
+    while (lr.pos < le) {
+      const [f2, w2] = lr.field();
+      if (f2 === 1 && w2 === 2) { const [a, b] = lr.bytes(); name = new TextDecoder().decode(buf.subarray(a, b)); }
+      else if (f2 === 5 && w2 === 0) extent = lr.varint();
+      else if (f2 === 2 && w2 === 2) feats.push(lr.bytes());
+      else skipField(lr, w2);
+    }
+    if (name !== "water") continue;
+    // This tile's part of the (parent) vector tile, in canvas pixels.
+    const k = SIZE * f / extent, ox = (x - tx * f) * SIZE, oy = (y - ty * f) * SIZE;
+    g.beginPath();
+    for (const [a, b] of feats) {
+      const fr = new Reader(buf, a, b); let type = 0, geom = null;
+      while (fr.pos < b) { const [ff, fw] = fr.field(); if (ff === 3 && fw === 0) type = fr.varint(); else if (ff === 4 && fw === 2) { const [ga, gb] = fr.bytes(); const gr = new Reader(buf, ga, gb); geom = []; while (gr.pos < gb) geom.push(gr.varint()); } else skipField(fr, fw); }
+      if (type !== 3 || !geom) continue;
+      for (const part of decodeGeometry(geom)) {
+        part.pts.forEach(([px, py], i) => i ? g.lineTo(px * k - ox, py * k - oy) : g.moveTo(px * k - ox, py * k - oy));
+        g.closePath();
+      }
+    }
+    g.fill("nonzero");
+  }
+  return g.getImageData(0, 0, SIZE, SIZE).data;
+}
+
+async function depthTile(z, x, y, palette, omt) {
+  const maskP = waterMask(omt, z, x, y).catch(() => null);
   const stops = [];
   for (let i = 0; i < palette.length; i += 2) stops.push([palette[i], parseColour(palette[i + 1])]);
   const zs = Math.min(z, 8), f = 2 ** (z - zs);
@@ -78,6 +123,8 @@ async function depthTile(z, x, y, palette) {
     }
   }
   if (!any) return null;
+  const mask = await maskP;
+  if (mask) { any = false; for (let i = 3; i < d.length; i += 4) { d[i] = d[i] * mask[i] / 255; if (d[i]) any = true; } if (!any) return null; }
   const canvas = new OffscreenCanvas(SIZE, SIZE);
   canvas.getContext("2d").putImageData(img, 0, 0);
   return (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();
@@ -217,7 +264,7 @@ function smoothTile(data) {
 self.onmessage = async ({ data: m }) => {
   try {
     if (m.kind === "depth") {
-      const buf = await depthTile(m.z, m.x, m.y, m.palette);
+      const buf = await depthTile(m.z, m.x, m.y, m.palette, m.omt);
       postMessage({ id: m.id, buf }, buf ? [buf] : []);
     } else if (m.kind === "mvt") {
       const res = await fetch(m.url);
