@@ -17,6 +17,11 @@ export const THEMES = {
     path: "#C6CACF", rail: "#B4B8BE", boundary: "#9AA0A6",
     label: "#3C4043", labelMuted: "#70757A", halo: "#FFFFFF", poi: "#5F6368",
     casing: "#FFFFFF", stopFill: "#FFFFFF", ring: "#1A1A1A", walk: "#1A1A1A", bike: "#1E8E3E",
+    // Height, from the coast to the peaks: lowland greens, hill tans, mountain browns, rock grey, snow.
+    relief: [-50, "#E6F0DE", 0, "#E6F0DE", 150, "#EAF1DC", 400, "#EEF0D8", 700, "#F1EBD4", 1100, "#EDE1C9", 1600, "#E4D5BF", 2200, "#DCD0C6", 2900, "#E6E3E0", 3800, "#F7F7F7"],
+    shade: "#5B5446", highlight: "#FFFFFF",
+    // Crops by the colour of their leaves.
+    crops: { farmland: "#E3EBC2", orchard: "#C9E1AE", vineyard: "#D3E3A6", plant_nursery: "#C6E3B4", farm: "#ECE5D3", meadow: "#D6EBC4", allotments: "#CFE6BC" },
   },
   dark: {
     land: "#1F2124", residential: "#232528", industrial: "#25282B", building: "#2B2E32", buildingLine: "#33363B",
@@ -27,6 +32,9 @@ export const THEMES = {
     path: "#45494E", rail: "#55595E", boundary: "#6E737A",
     label: "#E8EAED", labelMuted: "#9AA0A6", halo: "#1F2124", poi: "#BDC1C6",
     casing: "#1F2124", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#81C995",
+    relief: [-50, "#1E2620", 0, "#1E2620", 150, "#20271F", 400, "#23281F", 700, "#262720", 1100, "#29261F", 1600, "#2B2722", 2200, "#2C2A28", 2900, "#33322F", 3800, "#45444A"],
+    shade: "#000000", highlight: "#3A3F46",
+    crops: { farmland: "#2A3021", orchard: "#233322", vineyard: "#28331F", plant_nursery: "#213322", farm: "#2B2924", meadow: "#22301F", allotments: "#24321F" },
   },
 };
 
@@ -50,17 +58,23 @@ export function buildStyle(theme) {
     glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
     sprite: "https://tiles.openfreemap.org/sprites/ofm_f384/ofm",
     sources: {
+      // Elevation (Terrarium tiles, AWS Open Data): drives the height colours and the hill shading.
+      dem: { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 13,
+        attribution: 'Terrain <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen / AWS</a>' },
       omt: { type: "vector", url: "https://tiles.openfreemap.org/planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
     layers: [
       { id: "land", type: "background", paint: { "background-color": t.land } },
+      // The ground coloured by height, so open country isn't a blank grey.
+      { id: "relief", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.relief], "color-relief-opacity": z(4, 0.9, 12, 0.75, 15, 0.45) } },
       { id: "landuse-residential", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 9, filter: cls("residential", "suburb", "neighbourhood"),
         paint: { "fill-color": t.residential, "fill-opacity": z(9, 0, 12, 1) } },
       { id: "landuse-industrial", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("industrial", "commercial", "retail", "railway"),
         paint: { "fill-color": t.industrial } },
       // Natural ground: sand and beaches, shrub and heath, farmland, wetland, ice and rock.
-      { id: "landcover-farm", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 8, filter: cls("farmland"), paint: { "fill-color": t.farm } },
+      { id: "landcover-farm", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 8, filter: cls("farmland"),
+        paint: { "fill-color": ["match", ["get", "subclass"], ...Object.entries(t.crops).flat(), t.crops.farmland] } },
       { id: "landcover-sand", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("sand"), paint: { "fill-color": t.sand } },
       { id: "landcover-shrub", type: "fill", source: "omt", "source-layer": "landcover", filter: ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false], paint: { "fill-color": t.shrub } },
       { id: "landcover-wetland", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wetland"), paint: { "fill-color": t.wetland } },
@@ -68,7 +82,8 @@ export function buildStyle(theme) {
       { id: "landcover-rock", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("rock"), paint: { "fill-color": t.rock } },
       // Vegetation.
       { id: "landcover-wood", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wood", "forest"), paint: { "fill-color": t.wood } },
-      { id: "landcover-grass", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 9, filter: ["all", cls("grass", "park", "meadow"), ["!", ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false]]], paint: { "fill-color": t.grass } },
+      { id: "landcover-grass", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 9, filter: ["all", cls("grass", "park", "meadow"), ["!", ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false]]],
+        paint: { "fill-color": ["match", ["get", "subclass"], "meadow", t.crops.meadow, "allotments", t.crops.allotments, t.grass] } },
       { id: "park-reserve", type: "fill", source: "omt", "source-layer": "park", filter: cls("nature_reserve", "national_park", "protected_area"), paint: { "fill-color": t.reserve, "fill-opacity": 0.85 } },
       { id: "park", type: "fill", source: "omt", "source-layer": "park", filter: ["!", cls("nature_reserve", "national_park", "protected_area")], paint: { "fill-color": t.park } },
       { id: "landuse-green", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("cemetery", "pitch", "playground", "garden", "stadium"),
@@ -79,6 +94,10 @@ export function buildStyle(theme) {
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: notTunnel,
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },
+      // Hills and mountains in soft light from the north-west.
+      { id: "hillshade", type: "hillshade", source: "dem", maxzoom: 17,
+        paint: { "hillshade-shadow-color": t.shade, "hillshade-highlight-color": t.highlight, "hillshade-accent-color": t.shade,
+          "hillshade-exaggeration": z(5, 0.45, 11, 0.32, 15, 0.18), "hillshade-illumination-direction": 315 } },
       { id: "building", type: "fill", source: "omt", "source-layer": "building", minzoom: 14,
         paint: { "fill-color": t.building, "fill-outline-color": t.buildingLine, "fill-opacity": z(14, 0, 15, 1) } },
       { id: "path", type: "line", source: "omt", "source-layer": "transportation", minzoom: 15, filter: ["all", cls("path", "track"), notTunnel],
