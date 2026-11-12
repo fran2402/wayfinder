@@ -3,7 +3,10 @@
 // The site can't call the flight feeds from the browser (they don't allow it), so this tiny relay does:
 //   GET /airport?lat=41.30&lon=2.08&iata=BCN&icao=LEBL  → live departures and arrivals around an airport
 //   GET /near?lat=41.30&lon=2.08&dist=40               → aircraft near a point (for planes on the map)
-// Data: aircraft positions from adsb.lol (free, ODbL), routes from adsbdb.com (free). No keys needed.
+//   GET /schedule?iata=BCN&dir=departures              → today's whole board: times, gates, terminals, status
+// Data: aircraft positions from adsb.lol (free, ODbL), routes from adsbdb.com (free), no keys needed.
+// The day's schedule comes from AeroDataBox and needs a key: in the Worker's Settings → Variables and Secrets,
+// add a secret AERODATABOX_KEY (your RapidAPI key). Without it /schedule answers 501 and the site shows live flights only.
 
 const ALLOW = ["https://fran2402.github.io", "http://localhost:8765"];
 const MAX_ROUTE_LOOKUPS = 40; // the free plan allows 50 outgoing requests per call
@@ -21,6 +24,14 @@ export default {
         const lat = num("lat", -90, 90), lon = num("lon", -180, 180), dist = Math.min(100, num("dist", 1, 250));
         const ac = await aircraft(lat, lon, dist, ctx);
         return send({ at: Date.now(), aircraft: ac.map(a => ({ hex: a.hex, flight: (a.flight || "").trim(), type: a.t, lat: a.lat, lon: a.lon, track: a.track, alt: a.alt_baro, gs: a.gs })) }, 200, 10);
+      }
+      if (url.pathname === "/schedule") {
+        if (!env.AERODATABOX_KEY) return send({ error: "no schedule key" }, 501, 300);
+        const code = (url.searchParams.get("iata") || url.searchParams.get("icao") || "").toUpperCase();
+        const kind = url.searchParams.get("iata") ? "iata" : "icao";
+        if (!/^[A-Z0-9]{3,4}$/.test(code)) throw new Error("bad airport code");
+        const dir = url.searchParams.get("dir") === "arrivals" ? "arrivals" : "departures";
+        return send(await schedule(kind, code, dir, env, ctx), 200, 300);
       }
       if (url.pathname === "/airport") {
         const lat = num("lat", -90, 90), lon = num("lon", -180, 180);
@@ -90,4 +101,47 @@ async function board(lat, lon, iata, icao, ctx) {
   departures.sort((a, b) => a.km - b.km);
   arrivals.sort((a, b) => (a.status === "Landed") - (b.status === "Landed") || a.km - b.km);
   return { at: Date.now(), airport: { iata, icao }, departures, arrivals, sources: ["adsb.lol (ODbL)", "adsbdb.com"] };
+}
+
+/* ============================== The day's schedule (AeroDataBox) ============================== */
+
+const ADB = env => ({ host: env.AERODATABOX_HOST || "aerodatabox.p.rapidapi.com", key: env.AERODATABOX_KEY });
+async function adb(env, path, seconds, ctx) {
+  const { host, key } = ADB(env);
+  const u = `https://${host}${path}`, cache = caches.default, ck = new Request("https://adb.cache" + path);
+  const hit = await cache.match(ck);
+  if (hit) return hit.json();
+  const res = await fetch(u, { headers: { "X-RapidAPI-Key": key, "X-RapidAPI-Host": host, "x-magicapi-key": key } });
+  if (res.status === 204) return null;
+  if (!res.ok) throw new Error(`schedule source ${res.status}`);
+  const text = await res.text();
+  ctx.waitUntil(cache.put(ck, new Response(text, { headers: { "content-type": "application/json", "cache-control": `public, max-age=${seconds}` } })));
+  return JSON.parse(text);
+}
+
+/** Today (in the airport's own time zone), 00:00–24:00, in two 12-hour requests; cached 10 minutes. */
+async function schedule(kind, code, dir, env, ctx) {
+  const info = await adb(env, `/airports/${kind}/${code}`, 30 * 86400, ctx);
+  const tz = info?.timeZone || "UTC";
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const opts = `?withLeg=true&direction=${dir === "departures" ? "Departure" : "Arrival"}&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false&withLocation=false`;
+  const halves = await Promise.all([[`${today}T00:00`, `${today}T11:59`], [`${today}T12:00`, `${today}T23:59`]]
+    .map(([a, b]) => adb(env, `/flights/airports/${kind}/${code}/${a}/${b}${opts}`, 600, ctx)));
+  const list = halves.flatMap(h => h?.[dir] || []);
+  const flights = list.map(f => {
+    // With withLeg the flight has departure and arrival legs; without, "movement" is the other airport.
+    const mine = dir === "departures" ? f.departure : f.arrival, other = dir === "departures" ? f.arrival : f.departure;
+    const at = mine || f.movement || {}, far = (other || f.movement || {}).airport || {};
+    const sched = at.scheduledTime?.local || at.scheduledTimeLocal, revised = at.revisedTime?.local || at.actualTime?.local || null;
+    const hm = t => t ? t.slice(11, 16) : null;
+    const late = sched && revised ? Math.round((Date.parse(revised.replace(" ", "T")) - Date.parse(sched.replace(" ", "T"))) / 60000) : 0;
+    return {
+      time: hm(sched), revised: hm(revised), late: isFinite(late) ? late : 0, sort: sched || "",
+      flight: (f.number || "").replace(/\s+/g, ""), airline: f.airline?.name || null,
+      city: far.municipalityName || far.shortName || far.name || null, code: far.iata || far.icao || null, country: far.countryCode || null,
+      gate: at.gate || null, terminal: at.terminal || null, checkIn: at.checkInDesk || null, belt: at.baggageBelt || null,
+      status: f.status || "Unknown", aircraft: f.aircraft?.model || null, reg: f.aircraft?.reg || null,
+    };
+  }).filter(f => f.time).sort((a, b) => a.sort.localeCompare(b.sort));
+  return { at: Date.now(), date: today, tz, airport: { code, name: info?.shortName || info?.fullName || null, country: info?.country?.code || null }, dir, flights };
 }

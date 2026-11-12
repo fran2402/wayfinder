@@ -188,3 +188,13 @@ export async function airportBoard({ lat, lon, iata, icao }) {
   if (!res.ok) throw new Error(d.error || "flights " + res.status);
   return d;
 }
+
+/** Today's whole board (times, gates, terminals, status) from the relay; null when it has no schedule key. */
+export async function airportSchedule({ iata, icao }, dir) {
+  const q = new URLSearchParams(iata ? { iata, dir } : { icao, dir });
+  const res = await fetch(`${FLIGHTS_RELAY.replace(/\/$/, "")}/schedule?${q}`);
+  if (res.status === 501 || res.status === 404) return null;
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || "schedule " + res.status);
+  return d;
+}

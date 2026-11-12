@@ -11,7 +11,8 @@
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
 import { SeaMarks, preloadSeaIcons, SEA_LAYER_IDS } from "./maritime.js";
-import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween, FLIGHTS_RELAY, airportBoard } from "./aviation.js";
+import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween, FLIGHTS_RELAY, airportBoard, airportSchedule } from "./aviation.js";
+import { boardHtml, liveRows, markNow } from "./fids.js";
 import { preloadStreetIcons } from "./streets.js";
 import { attach as attachIcons } from "./icons.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
@@ -32,9 +33,11 @@ document.documentElement.dataset.theme = themeNow();
 
 const wideQuery = matchMedia("(min-width: 900px)");
 const wide = () => wideQuery.matches;
-const START = store.get("view", { center: [15.977, 45.8131], zoom: 13.4 }); // Zagreb until you move the map
+// Where to start: the link's #map=zoom/lat/lon, else where you last were, else Zagreb.
+const linkView = (() => { const m = /(?:^|&)map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)/.exec(location.hash.slice(1)); return m ? { zoom: +m[1], center: [+m[3], +m[2]] } : null; })();
+const START = linkView || store.get("view", { center: [15.977, 45.8131], zoom: 13.4 });
 const map = new maplibregl.Map({
-  container: "map", style: buildStyle(themeNow()), center: START.center, zoom: START.zoom, hash: "map",
+  container: "map", style: buildStyle(themeNow()), center: START.center, zoom: START.zoom,
   attributionControl: false, dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, minZoom: 3, maxZoom: 19, fadeDuration: 120,
 });
 map.on("error", e => console.warn("Map:", e.error?.message || e));
@@ -62,7 +65,16 @@ const overlay = { focus: EMPTY, trip: EMPTY };
 function setOverlay(name, fc) { overlay[name] = fc; map.getSource(name)?.setData(fc); }
 
 map.on("load", () => net.update());
+// The view goes into the address (for links), but going back through the history never moves the map:
+// closing a panel leaves the map where you are now.
+function writeViewToUrl() {
+  const c = map.getCenter(), params = location.hash.slice(1).split("&").filter(p => p && !p.startsWith("map="));
+  params.unshift(`map=${map.getZoom().toFixed(2)}/${c.lat.toFixed(5)}/${c.lng.toFixed(5)}`);
+  history.replaceState(history.state, "", location.pathname + location.search + "#" + params.join("&"));
+}
+addEventListener("popstate", () => setTimeout(writeViewToUrl, 0));
 map.on("moveend", () => {
+  writeViewToUrl();
   net.update();
   store.set("view", { center: map.getCenter().toArray(), zoom: map.getZoom() });
   onMapMoved();
@@ -578,7 +590,13 @@ VIEWS.airport = {
     map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13.3), padding: padding(), duration: 700 });
     map.once("idle", () => { s.runways = runwaysIn(map, [s.lon, s.lat], 7000).sort((a, b) => b.length - a.length); refresh(s); });
     if (FLIGHTS_RELAY) {
-      const tick = () => { if (screen() !== s) return clearInterval(s.timer); s.board$ = false; load(s, "board", () => airportBoard(s)); };
+      // Moving now: every 30 s. Today's timetable: every 5 min, for the tab that's open.
+      let n = 0;
+      const tick = () => {
+        if (screen() !== s) return clearInterval(s.timer);
+        s.board$ = false; load(s, "board", () => airportBoard(s));
+        if (s.tab !== "overview" && (n++ % 10 === 0 || !s.sched?.[s.tab])) loadSchedule(s);
+      };
       clearInterval(s.timer); s.timer = setInterval(tick, 30000); tick();
     }
     load(s, "near", async () => {
@@ -604,21 +622,8 @@ VIEWS.airport = {
         ${s.near?.stations?.length ? `${section("Getting there by public transport")}<div class="card list">${s.near.stations.map(st => stationRow(st, distance(st.d))).join("")}</div>`
           : s.near && !s.near.stations.length ? "" : s.nearErr ? "" : loading(2)}`;
     } else {
-      const dep = s.tab === "departures", rows = s.board?.[dep ? "departures" : "arrivals"];
-      const other = f => (dep ? f.to : f.from) || {};
-      const status = f => f.status + (f.etaMin && f.status !== "Landed" ? ` · ${f.etaMin} min` : f.alt > 0 ? ` · ${Math.round(f.alt / 100) * 100} ft` : "");
-      const live = FLIGHTS_RELAY && (rows || s.boardErr);
-      body = `<div class="board">
-          <div class="bhead">${icon("plane", "s")}${BOARD_FLAP(dep ? "DEPARTURES" : "ARRIVALS")}${FLIGHTS_RELAY ? `<span class="blive">● Live</span>` : ""}</div>
-          ${FLIGHTS_RELAY ? `<div class="brow bcols b3"><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Status</span></div>
-            ${s.boardErr ? `<p class="bnote">Couldn't load flights (${esc(s.boardErr)}).</p>`
-              : !rows ? `<p class="bnote">Loading flights…</p>`
-              : !rows.length ? `<p class="bnote">No ${dep ? "departures" : "arrivals"} in the air or on the move right now.</p>`
-              : rows.slice(0, 14).map(f => `<div class="brow b3"><span>${BOARD_FLAP(String(f.flight).slice(0, 7))}</span><span class="bcity"><b>${esc(other(f).city || other(f).name || "—")}</b><small>${esc(other(f).iata || other(f).icao || "")}${f.airline ? " · " + esc(f.airline) : ""}</small></span><span class="bstat">${esc(status(f))}</span></div>`).join("")}
-            <p class="bnote small">Flights moving now, from aircraft signals (adsb.lol) and routes (adsbdb). Updates every 30 s.</p>`
-          : `<div class="brow bcols"><span>Time</span><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Gate</span></div>
-          ${[0, 1, 2].map(() => `<div class="brow ghost"><span>${BOARD_FLAP("--:--")}</span><span>${BOARD_FLAP("------")}</span><span>${BOARD_FLAP("--------")}</span><span>${BOARD_FLAP("--")}</span></div>`).join("")}
-          <p class="bnote">Live ${dep ? "departures" : "arrivals"} are coming ${soon()}</p>`}</div>
+      body = `${fidsFor(s, "small")}
+        ${FLIGHTS_RELAY ? `<button class="fullbtn" data-fids-act="full">${icon("plus", "s")}Full-screen board</button>` : ""}
         ${section("Look up a flight")}
         <form class="flookup" data-flight-form><input name="f" value="${esc(s.flightQ || "")}" placeholder="Flight number, e.g. VY1234" autocomplete="off" autocapitalize="characters" spellcheck="false"><button>${icon("search", "s")}</button></form>
         ${s.flight$ ? loading(2) : s.flightErr ? failed(s.flightErr) : s.flight !== undefined ? flightHtml(s.flight, s) : ""}`;
@@ -633,6 +638,56 @@ VIEWS.airport = {
       ${body}`;
   },
 };
+/** The board for the open tab: today's timetable if the relay has one, else the flights moving now. */
+function fidsFor(s, size) {
+  const dir = s.tab === "arrivals" ? "arrivals" : "departures", dep = dir === "departures";
+  const sch = s.sched?.[dir];
+  const meta = { dir, code: s.iata || s.icao, name: s.name, open: s.fOpen?.[dir], tz: sch?.tz, country: sch?.airport?.country || s.country };
+  if (!FLIGHTS_RELAY) return boardHtml([], { ...meta, mode: "live", note: `Live ${dir} are coming.` }, size);
+  if (sch) return boardHtml(markNow(sch.flights, sch.tz), { ...meta, mode: "day", note: `No ${dir} listed today.`,
+    foot: `Today's timetable · times are local · updated every 5 min` }, size);
+  const loadingDay = s.schedLoading?.[dir];
+  if (s.schedNone || s.schedErr?.[dir] || !loadingDay) {
+    const rows = s.board ? liveRows(s.board, dep) : s.boardErr ? [] : null;
+    return boardHtml(rows, { ...meta, mode: "live", note: s.boardErr ? `Couldn't load flights (${esc(s.boardErr)}).` : `No ${dir} on the move right now.`,
+      foot: `Flights moving now (aircraft signals: adsb.lol · routes: adsbdb).${s.schedNone ? " Today's full timetable with gates needs a schedule key in the relay." : ""}` }, size);
+  }
+  return boardHtml(null, { ...meta, mode: "day", note: "Loading today's flights…" }, size);
+}
+async function loadSchedule(s) {
+  const dir = s.tab === "arrivals" ? "arrivals" : "departures";
+  if (s.schedNone || s.schedLoading?.[dir] === "busy") return;
+  (s.schedLoading ||= {})[dir] = "busy";
+  try {
+    const d = await airportSchedule(s, dir);
+    if (!d) s.schedNone = true; else { (s.sched ||= {})[dir] = d; if (s.schedErr) delete s.schedErr[dir]; }
+  } catch (e) { (s.schedErr ||= {})[dir] = e.message; }
+  s.schedLoading[dir] = "done";
+  refresh(s); renderFull(s);
+  if (s.sched?.[dir] && !s.scrolled?.[dir]) { (s.scrolled ||= {})[dir] = 1; requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); }
+}
+// Tap a flight to open its details; the full-screen board.
+function renderFull(s) {
+  const el = $("#fidsfull");
+  if (!el || screen() !== s) return el?.remove();
+  el.querySelector(".fidswrap").innerHTML = fidsFor(s, "big");
+}
+document.addEventListener("click", e => {
+  const row = e.target.closest("[data-fids]"), act = e.target.closest("[data-fids-act]");
+  const s = screen();
+  if (s.t !== "airport" || (!row && !act)) return;
+  const dir = s.tab === "arrivals" ? "arrivals" : "departures";
+  if (row) { const i = +row.dataset.fids; s.fOpen ||= {}; s.fOpen[dir] = s.fOpen[dir] === i ? null : i; s.keepScroll = true; refresh(s); renderFull(s); return; }
+  if (act.dataset.fidsAct === "full") {
+    const el = document.createElement("div"); el.id = "fidsfull"; el.className = "fidsfull";
+    el.innerHTML = `<button class="fclose" data-fids-act="close" aria-label="Close">${icon("close")}</button><div class="fidswrap"></div>`;
+    document.body.append(el); renderFull(s);
+    el.querySelector("[data-next]")?.scrollIntoView({ block: "center" });
+  }
+  if (act.dataset.fidsAct === "close") $("#fidsfull")?.remove();
+});
+addEventListener("keydown", e => { if (e.key === "Escape") $("#fidsfull")?.remove(); });
+
 document.addEventListener("submit", e => {
   const f = e.target.closest("[data-flight-form]");
   if (!f) return;
@@ -950,7 +1005,7 @@ document.addEventListener("click", async e => {
   if (!el || el.disabled) return;
   const d = el.dataset, s = screen();
   if (d.soon) return toast(`${d.soon}: coming soon.`);
-  if (d.ptab) { s.tab = d.ptab; return refresh(s); }
+  if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
   if (d.layer === "sea") { settings.sea = !settings.sea; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "places") { settings.places = !settings.places; saveSettings(); applyLayers(); return renderLayers(); }
