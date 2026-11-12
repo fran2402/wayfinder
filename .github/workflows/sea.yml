@@ -4,8 +4,8 @@ name: Build sea marks
 # (University of Freiburg; a few minutes), made into data/sea.pmtiles. Publishing the site picks that
 # file up (see pages.yml) and runs as soon as this finishes.
 on:
-  schedule:
-    - cron: "41 1 * * *" # nightly
+  # By hand only: QLever currently refuses GitHub's runners (403). Refresh from another machine with
+  # tools/build-sea.mjs qlever, tools/build-sea.sh and tools/publish-sea.sh.
   workflow_dispatch:
 
 permissions:

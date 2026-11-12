@@ -3,18 +3,15 @@ name: Publish site
 # The site is plain HTML, CSS and JavaScript, published as it is — plus two data files made here:
 #   data/ski.pmtiles — the world's ski runs, lifts and ski areas (OpenSkiMap's daily OpenStreetMap
 #                      extract; tools/build-ski.sh). Quick: rebuilt once a week, reused in between.
-#   data/sea.pmtiles — the world's sea marks, made by the separate "Build sea marks" workflow
-#                      (sea.yml, nightly, a piece at a time); every publish uses its latest file and
-#                      a publish follows each sea build.
+#   data/sea.pmtiles — the world's sea marks (641k marks), built from QLever's OpenStreetMap endpoint
+#                      (tools/build-sea.mjs qlever + tools/build-sea.sh) and stored in parts on the
+#                      sea-data branch (tools/publish-sea.sh); joined here.
 on:
   push:
     branches: [main]
   schedule:
     - cron: "17 3 * * 1" # Mondays: fresh ski data
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Build sea marks"]
-    types: [completed]
 
 permissions:
   contents: read
@@ -49,12 +46,13 @@ jobs:
         if: steps.ski.outputs.cache-hit != 'true'
         run: tools/build-ski.sh /tmp/ski data/ski.pmtiles
 
-      # Sea marks: the latest file made by the "Build sea marks" workflow (sea.yml), if there is one yet.
-      - uses: actions/cache/restore@v4
+      # Sea marks: kept in parts on the sea-data branch (tools/publish-sea.sh), joined here.
+      - uses: actions/checkout@v4
         with:
-          path: data/sea.pmtiles
-          key: seatiles-${{ github.run_id }}
-          restore-keys: seatiles-
+          ref: sea-data
+          path: sea-data
+      - name: Join the sea tiles
+        run: cat sea-data/sea.pmtiles.part* > data/sea.pmtiles && rm -rf sea-data && ls -la data/sea.pmtiles
 
       # Pages has to be switched on once by hand: Settings → Pages → Source: "GitHub Actions".
       - uses: actions/configure-pages@v5
