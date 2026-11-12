@@ -38,24 +38,49 @@ export function normColour(c) {
   return c;
 }
 
-export const lineKey = (cls, name, colour) => `${cls}|${name}|${normColour(colour)}`;
+/** A line is a kind and a name; lines of one name in different places are different lines. */
+export const baseKey = (cls, name) => `${cls}|${name}`;
 
 /** One registry for every line seen anywhere (map, departures, trips) so colours stay put. */
 export const registry = new Map();
+/** Line instances by kind and name (one per area where that name is used). */
+export const byBase = new Map();
 
-export function ensureLine({ mode, name, colour, textColour, longName, agency }) {
+/** A line by its key (key = kind|name@area). Feeds that disagree on colour still give one line. */
+export function ensureLine({ mode, name, colour, textColour, longName, agency, key }) {
   const cls = classOf(mode);
   if (!cls) return null;
   name = String(name || longName || "?").trim();
-  const key = lineKey(cls, name, colour);
+  const base = baseKey(cls, name);
+  key = key || base + "@0";
   let l = registry.get(key);
   if (!l) {
-    l = { key, cls, mode, name, raw: normColour(colour), rawText: normColour(textColour), longName: longName || "", agency: agency || "",
-      routes: new Set(), minZoom: 99, colour: null, nid: registry.size + 1, rank: null };
+    l = { key, base, cls, mode, name, raw: normColour(colour), rawText: normColour(textColour), longName: longName || "", agency: agency || "",
+      routes: new Set(), minZoom: 99, colour: null, nid: registry.size + 1, rank: null, bbox: null };
     registry.set(key, l);
+    if (!byBase.has(base)) byBase.set(base, []);
+    byBase.get(base).push(l);
   }
+  if (!l.raw && normColour(colour)) { l.raw = normColour(colour); l.rawText = normColour(textColour); l.colour = null; }
   if (longName && !l.longName) l.longName = longName;
   if (agency && !l.agency) l.agency = agency;
+  return l;
+}
+
+/** Degrees between a point and a box (0 inside). */
+const boxDist = (b, lon, lat) => Math.hypot(Math.max(b[0] - lon, 0, lon - b[2]) * Math.cos(lat * Math.PI / 180), Math.max(b[1] - lat, 0, lat - b[3]));
+
+/** The line of that name used around a point: the instance whose area is within ~15 km, else a new one. */
+export function lineNear(fields, lon, lat) {
+  const cls = classOf(fields.mode);
+  if (!cls) return null;
+  const name = String(fields.name || fields.longName || "?").trim(), base = baseKey(cls, name);
+  let best = null, bd = 0.14;
+  for (const c of byBase.get(base) || []) if (c.bbox) { const d = boxDist(c.bbox, lon, lat); if (d < bd) { bd = d; best = c; } }
+  if (best) return ensureLine({ ...fields, key: best.key });
+  // No instance known around here (the map hasn't loaded it): one per ~25 km cell.
+  const l = ensureLine({ ...fields, key: `${base}@${Math.round(lat * 4)}/${Math.round(lon * 4)}` });
+  if (l && !l.bbox) l.bbox = [lon, lat, lon, lat];
   return l;
 }
 
@@ -99,7 +124,8 @@ export const badge = (l, size = "") =>
   `<span class="badge ${l.cls} ${size}" style="--c:${colourOf(l)};--t:${textOn(l)}" title="${esc(classLabel(l.cls) + " " + l.name)}">${esc(l.name)}</span>`;
 
 /** A line from a departure (stoptimes) or a trip leg. */
-export const lineOfStopTime = st => ensureLine({
-  mode: classOf(st.mode) ? st.mode : "BUS", name: st.routeShortName || st.displayName || st.tripShortName, colour: st.routeColor, textColour: st.routeTextColor,
-  longName: st.routeLongName, agency: st.agencyName,
-});
+export const lineOfStopTime = st => {
+  const p = st.place || st.from || {};
+  return lineNear({ mode: classOf(st.mode) ? st.mode : "BUS", name: st.routeShortName || st.displayName || st.tripShortName, colour: st.routeColor, textColour: st.routeTextColor,
+    longName: st.routeLongName, agency: st.agencyName }, p.lon || 0, p.lat || 0);
+};

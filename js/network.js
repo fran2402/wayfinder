@@ -5,6 +5,7 @@ import { ensureLine, registry } from "./lines.js";
 import { debounce } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
+const MAINLINE = new Set(["REGIONAL_RAIL", "REGIONAL_FAST_RAIL", "LONG_DISTANCE", "HIGHSPEED_RAIL", "NIGHT_RAIL", "RAIL"]);
 
 /** Line width in pixels for a relative width w, by zoom. */
 const scaled = (prop, add = 0, mul = 1) => ["interpolate", ["exponential", 1.35], ["zoom"],
@@ -13,7 +14,7 @@ const wide = (a, b, c, d) => ["interpolate", ["linear"], ["zoom"], 8, a, 12, b, 
 
 export function networkSources() {
   return { network: { type: "geojson", data: EMPTY, tolerance: 0.45, buffer: 64 }, stations: { type: "geojson", data: EMPTY, buffer: 32 },
-    focus: { type: "geojson", data: EMPTY }, trip: { type: "geojson", data: EMPTY } };
+    focus: { type: "geojson", data: EMPTY }, trip: { type: "geojson", data: EMPTY }, vehicles: { type: "geojson", data: EMPTY } };
 }
 
 /** Layers for three slots in the base style: lines under the labels, stations, labels on top. */
@@ -50,6 +51,14 @@ export function networkLayers(t) {
       paint: { "circle-radius": ["case", ["==", ["get", "end"], 1], 6.5, 3.2], "circle-color": t.stopFill,
         "circle-stroke-color": ["case", ["==", ["get", "end"], 1], t.ring, ["get", "c"]], "circle-stroke-width": ["case", ["==", ["get", "end"], 1], 2.6, 1.6] } },
   ];
+  // Vehicles on the move: a dot in the line's colour, its number inside from zoom 14.
+  stations.push(
+    { id: "vehicles", type: "circle", source: "vehicles",
+      paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3.2, 14, 7.5, 17, 11], "circle-color": ["get", "c"],
+        "circle-stroke-color": t.stopFill, "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.2] } },
+    { id: "vehicle-labels", type: "symbol", source: "vehicles", minzoom: 14,
+      layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "text-allow-overlap": true, "text-ignore-placement": true, "text-max-width": 3 },
+      paint: { "text-color": "#fff" } });
   const labels = [
     { id: "station-labels", type: "symbol", source: "stations",
       filter: ["all", ["==", ["get", "lbl"], 1], ["any", [">=", ["zoom"], 15], ["all", [">=", ["zoom"], 11], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 13], [">=", ["get", "n"], 4]]]],
@@ -106,6 +115,7 @@ export class Network {
     this.enabled = new Set(["train", "metro", "tram", "bus", "ferry", "other"]);
     this.spread = true;
     this.liveOnly = true;       // only lines with something running now
+    this.vehicles = true;       // moving vehicles on the map
     // What's running changes: refresh it every three minutes while the page is open.
     setInterval(() => { if (!document.hidden) this.worker.postMessage({ type: "live" }); }, 180000);
     this.focusKey = null;
@@ -121,6 +131,7 @@ export class Network {
     this.worker.onerror = e => console.error("Network worker:", e.message);
   }
   on(fn) { this.listeners.add(fn); }
+  onTick(fn) { (this.tickers ||= []).push(fn); }
   emit() { for (const fn of this.listeners) fn(); }
   get loading() { return this.active + this.queue.length; }
 
@@ -171,9 +182,10 @@ export class Network {
       this.pump();
     } else if (m.type === "data") {
       for (const l of m.lines) {
-        const r = ensureLine({ mode: l.mode, name: l.name, colour: l.raw, textColour: l.rawText, longName: l.longName });
+        const r = ensureLine({ mode: l.mode, name: l.name, colour: l.raw, textColour: l.rawText, longName: l.longName, key: l.key });
         if (!r) continue;
         if (l.colour) r.colour = l.colour;
+        if (l.bbox) r.bbox = l.bbox;
         r.wid = l.nid; this.byId.set(l.nid, r.key);
         for (const id of l.routes) r.routes.add(id);
         r.numStops = Math.max(r.numStops || 0, l.numStops); r.minZoom = Math.min(r.minZoom, l.minZoom);
@@ -183,6 +195,10 @@ export class Network {
       this.setData("stations", m.stations);
       this.lastMs = m.ms;
       this.emit();
+    } else if (m.type === "vehicles") {
+      this.vehicleCount = m.features.length;
+      this.map.getSource("vehicles")?.setData({ type: "FeatureCollection", features: m.features });
+      for (const fn of this.tickers || []) fn();
     } else if (m.type === "error") {
       console.error("Network worker:", m.message);
     } else if (m.type === "answer") {
@@ -202,7 +218,7 @@ export class Network {
   render(force = false) {
     const b = this.map.getBounds(), w = b.getWest(), e = b.getEast(), s = b.getSouth(), n = b.getNorth();
     const inside = this.box && w >= this.box[0] && e <= this.box[2] && s >= this.box[1] && n <= this.box[3];
-    const opts = { zoom: Math.floor(this.map.getZoom()), bucket: this.bucket(), enabled: [...this.enabled].sort(), spread: this.spread, liveOnly: this.liveOnly };
+    const opts = { zoom: Math.floor(this.map.getZoom()), bucket: this.bucket(), enabled: [...this.enabled].sort(), spread: this.spread, liveOnly: this.liveOnly, vehicles: this.vehicles };
     const sig = JSON.stringify(opts);
     if (!force && sig === this.lastSent && inside) return;
     const dx = e - w, dy = n - s;
@@ -224,6 +240,11 @@ export class Network {
     m.setPaintProperty("stations", "icon-opacity", sop);
     for (const id of ["station-links", "station-links-casing"]) m.setPaintProperty(id, "line-opacity", sop);
     m.setPaintProperty("station-labels", "text-opacity", sop);
+    if (m.getLayer("vehicles")) {
+      const vop = this.dimmed ? 0.35 : this.focusKey ? ["case", ["==", ["get", "key"], this.focusKey], 1, 0.12] : 1;
+      m.setPaintProperty("vehicles", "circle-opacity", vop); m.setPaintProperty("vehicles", "circle-stroke-opacity", vop);
+      m.setPaintProperty("vehicle-labels", "text-opacity", vop);
+    }
   }
 
   // ---- Questions the interface asks (answered by the worker) ----
@@ -236,6 +257,11 @@ export class Network {
         if (!l || !this.enabled.has(l.cls) || (l.cls === line.cls && l.name === line.name)) continue;
         // On a rail, metro or tram line, the changes worth showing are to other rail, metro, tram and ferry lines.
         if (line.cls !== "bus" && l.cls === "bus") continue;
+        // Main-line trains are numbered per train ("IC 2172"): one "Rail" badge stands for all of them.
+        if (l.cls === "train" && MAINLINE.has(l.mode)) {
+          if (!seen.has("rail")) { seen.add("rail"); out.push(ensureLine({ mode: "RAIL", name: "Rail", colour: "5E6772", key: "train|Rail@any" })); }
+          continue;
+        }
         const k = l.cls + "|" + l.name;
         if (!seen.has(k)) { seen.add(k); out.push(l); }
       }

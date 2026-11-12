@@ -10,7 +10,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -33,6 +33,7 @@ map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e
 const net = new Network(map);
 net.spread = settings.spread;
 net.liveOnly = settings.liveOnly;
+net.vehicles = settings.vehicles;
 net.enabled = new Set(settings.modes);
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -50,7 +51,7 @@ net.on(() => { $("#busy").hidden = net.loading === 0; });
 function applyTheme() {
   const t = themeNow();
   document.documentElement.dataset.theme = t;
-  $('meta[name="theme-color"]').content = t === "dark" ? "#141619" : "#FBFAF6";
+  $('meta[name="theme-color"]').content = t === "dark" ? "#09090B" : "#F4F4F5";
   map.setStyle(buildStyle(t));
   map.once("style.load", () => { net.render(true); net.applyFocus(); for (const k in overlay) map.getSource(k)?.setData(overlay[k]); });
 }
@@ -59,7 +60,7 @@ darkQuery.addEventListener("change", () => settings.theme === "system" && applyT
 const meEl = document.createElement("div"); meEl.className = "me-dot";
 const meMarker = new maplibregl.Marker({ element: meEl });
 const pinEl = document.createElement("div"); pinEl.className = "pin-mark";
-pinEl.innerHTML = `<svg viewBox="0 0 30 40"><path d="M15 39C15 39 2 23.5 2 14.5a13 13 0 0 1 26 0C28 23.5 15 39 15 39Z" fill="#141518" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14.5" r="5.5" fill="#FFC21A"/></svg>`;
+pinEl.innerHTML = `<svg viewBox="0 0 30 40"><path d="M15 39C15 39 2 23.5 2 14.5a13 13 0 0 1 26 0C28 23.5 15 39 15 39Z" fill="#5B5BF7" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14.5" r="5.5" fill="#fff"/></svg>`;
 const pinMarker = new maplibregl.Marker({ element: pinEl, anchor: "bottom" });
 
 $("#zin").addEventListener("click", () => map.zoomIn());
@@ -129,9 +130,41 @@ const PAGES = new Set(["search", "settings"]);
 let stack = [{ t: "explore", tab: "near" }];
 const cur = () => stack[stack.length - 1];
 function screen() { for (let i = stack.length - 1; i >= 0; i--) if (!PAGES.has(stack[i].t)) return stack[i]; return stack[0]; }
-function go(s) { stack.push(s); render(true); }
-function back() { if (stack.length > 1) { stack.pop(); render(true); } }
-function home() { stack = [stack[0]]; render(true); }
+/* Screens live in the browser history: Back (button, gesture, Alt+←) steps back through them, and
+   stops, places and lines get links of their own ("…#map=…&s=stop:ID~Name"). */
+function screenParam(s) {
+  if (s.t === "stop") return `stop:${s.ids[0]}~${s.name || ""}`;
+  if (s.t === "place") return `place:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${s.name || ""}`;
+  if (s.t === "line") return `line:${s.key}${s.tripId ? "~" + s.tripId : ""}`;
+  return "";
+}
+function urlFor(s) {
+  const params = location.hash.slice(1).split("&").filter(p => p && !p.startsWith("s="));
+  const sp = s ? screenParam(s) : "";
+  if (sp) params.push("s=" + encodeURIComponent(sp));
+  return location.pathname + location.search + (params.length ? "#" + params.join("&") : "");
+}
+/** Swap screens with a short cross-fade where the browser can (View Transitions). */
+function transition(fn) {
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) document.startViewTransition(fn);
+  else fn();
+}
+function go(s) {
+  stack.push(s);
+  history.pushState({ wf: stack.length }, "", urlFor(PAGES.has(s.t) ? screen() : s));
+  transition(() => render(true));
+}
+function back() {
+  if ((history.state?.wf || 1) > 1) history.back();
+  else if (stack.length > 1) { stack.pop(); history.replaceState({ wf: stack.length }, "", urlFor(screen())); transition(() => render(true)); }
+}
+function home() { stack = [stack[0]]; history.replaceState({ wf: 1 }, "", urlFor(null)); transition(() => render(true)); }
+addEventListener("popstate", e => {
+  const depth = e.state?.wf || 1;
+  if (depth >= stack.length) return;
+  stack.length = Math.max(1, depth);
+  transition(() => render(true));
+});
 
 let shown = null;
 function render(fresh = false) {
@@ -247,7 +280,7 @@ function board(st, nRows, distLabel) {
 }
 
 function searchBar() {
-  return `<div class="search" role="search"><button class="field" data-act="search">${icon("search")}<span>Where to?</span></button>
+  return `<div class="search" role="search"><button class="field" data-act="search">${icon("search")}<span>Search places, stops and lines</span><kbd>/</kbd></button>
     <button class="me" data-act="settings" aria-label="Settings">${icon("gear", "s")}</button></div>`;
 }
 
@@ -670,7 +703,8 @@ function settingsPage() {
       <p class="sec">Appearance</p>
       <div class="seg" role="group" aria-label="Theme">${["system", "light", "dark"].map(t => `<button data-theme-set="${t}" aria-pressed="${settings.theme === t}">${cap(t)}</button>`).join("")}</div>
       <p class="sec">Map</p>
-      <div class="group">${sw(settings.liveOnly, 'data-set="live"', "Only lines running now", "Lines with nothing on the move in the next half hour are left out")}
+      <div class="group">${sw(settings.vehicles, 'data-set="vehicles"', "Moving vehicles", "Every bus, tram and train on its way, as it moves")}
+        ${sw(settings.liveOnly, 'data-set="live"', "Only lines running now", "Lines with nothing on the move in the next half hour are left out")}
         ${sw(settings.spread, 'data-set="spread"', "Lines side by side", "Lines sharing a street or track are drawn next to each other")}</div>
       <p class="sec">Show</p>
       <div class="group">${CLASSES.map(c => sw(net.enabled.has(c.id), `data-mode="${c.id}"`, c.label, "", c.icon)).join("")}</div>
@@ -746,6 +780,7 @@ document.addEventListener("click", async e => {
     return refresh(s);
   }
   if (d.only) { s.only = s.only === d.only ? null : d.only; return refresh(s); }
+  if (d.set === "vehicles") { settings.vehicles = net.vehicles = !settings.vehicles; saveSettings(); net.render(true); if (!settings.vehicles) map.getSource("vehicles")?.setData(EMPTY); $("#page").innerHTML = settingsPage(); $("#live").hidden = true; return; }
   if (d.set === "live") { settings.liveOnly = net.liveOnly = !settings.liveOnly; saveSettings(); net.render(true); $("#page").innerHTML = settingsPage(); return; }
   if (d.set === "spread") { settings.spread = net.spread = !settings.spread; saveSettings(); net.render(); $("#page").innerHTML = settingsPage(); return; }
   if (d.themeSet) { settings.theme = d.themeSet; saveSettings(); applyTheme(); $("#page").innerHTML = settingsPage(); return; }
@@ -771,6 +806,17 @@ document.addEventListener("input", e => {
 });
 document.addEventListener("change", e => { if (e.target.id === "whenat" && T.time) { T.time = new Date(e.target.value).toISOString(); refresh(screen()); } });
 document.addEventListener("keydown", e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "");
+  if (!typing && (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"))) { e.preventDefault(); if (cur().t !== "search") go({ t: "search", q: "" }); return; }
+  if (e.target.id === "q" && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    const rows = [...document.querySelectorAll("#results .row")];
+    if (!rows.length) return;
+    const i = rows.findIndex(r => r.classList.contains("sel")), j = Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
+    rows.forEach(r => r.classList.remove("sel")); rows[j].classList.add("sel"); rows[j].scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (e.key === "Enter" && e.target.id === "q") { const sel = document.querySelector("#results .row.sel"); if (sel) { e.preventDefault(); sel.click(); return; } }
   if (e.key === "Escape" && stack.length > 1) { e.preventDefault(); back(); }
   const row = e.target.closest?.(".srow, .lrow");
   if (row && (e.key === "Enter" || e.key === " ") && e.target === row) { e.preventDefault(); row.click(); }
@@ -788,6 +834,8 @@ net.on(debounce(() => {
 // Map taps: a station opens its departures, a line opens the line (or a choice of lines).
 const tapBox = (p, r = 8) => [[p.x - r, p.y - r], [p.x + r, p.y + r]];
 map.on("click", e => {
+  const veh = map.getLayer("vehicles") && map.queryRenderedFeatures(tapBox(e.point, 10), { layers: ["vehicles"] })[0];
+  if (veh?.properties.key && registry.get(veh.properties.key)) return go({ t: "line", key: veh.properties.key, tripId: veh.properties.trip });
   const st = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations"] });
   if (st.length) { const f = st[0].properties; return go({ t: "stop", ids: String(f.keys).split("\n"), name: f.name, lon: st[0].geometry.coordinates[0], lat: st[0].geometry.coordinates[1] }); }
   const keys = [...new Set(map.queryRenderedFeatures(tapBox(e.point, 11), { layers: ["net-lines"] }).flatMap(f => net.keysOf(f.properties.lines)))];
@@ -806,6 +854,33 @@ map.on("mousemove", e => {
 });
 
 render(true);
+
+// A link to a stop, a place or a line opens it.
+(() => {
+  const raw = location.hash.slice(1).split("&").find(p => p.startsWith("s="));
+  history.replaceState({ wf: 1 }, "", urlFor(null));
+  if (!raw) return;
+  const v = decodeURIComponent(raw.slice(2)), [kind, rest] = [v.slice(0, v.indexOf(":")), v.slice(v.indexOf(":") + 1)];
+  const [id, name] = rest.split("~");
+  if (kind === "stop") go({ t: "stop", ids: [id], name: name || null, lon: null, lat: null });
+  else if (kind === "place") { const [lat, lon] = id.split(",").map(Number); go({ t: "place", name: name || "Place", sub: "", lon, lat }); }
+  else if (kind === "line") {
+    // Lines come from the map: wait until it has loaded this one.
+    const tryOpen = () => { if (registry.get(id)) { go({ t: "line", key: id, tripId: name || null }); return true; } return false; };
+    if (!tryOpen()) { const t = setInterval(() => { if (tryOpen()) clearInterval(t); }, 800); setTimeout(() => clearInterval(t), 30000); }
+  }
+})();
+
+// Works offline and installs like an app.
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+// The live pill: how many vehicles are moving in view right now.
+net.onTick(() => {
+  const n = net.vehicleCount || 0, el = $("#live");
+  el.hidden = !settings.vehicles || !n;
+  el.querySelector("b").textContent = n;
+  el.querySelector("span").textContent = n === 1 ? "vehicle moving" : "vehicles moving";
+});
 
 // For poking around in the browser console: wayfinder.map, wayfinder.net, wayfinder.stack …
 window.wayfinder = { map, net, registry, get stack() { return stack; }, T, settings };

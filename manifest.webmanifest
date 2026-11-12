@@ -4,7 +4,7 @@
   "description": "Public transport on an open map.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#FBFAF6",
-  "theme_color": "#141518",
+  "background_color": "#F4F4F5",
+  "theme_color": "#5B5BF7",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
 }

@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Wayfinder</title>
 <meta name="description" content="Public transport on an open map: every line drawn like a metro map, live departures, line diagrams and journey planning.">
-<meta name="theme-color" content="#FBFAF6">
+<meta name="theme-color" content="#F4F4F5">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://api.transitous.org" crossorigin>
 <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:ital,wght@0,300..900;1,400..700&family=Overpass+Mono:wght@400..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..900&family=Geist+Mono:wght@400..700&display=swap">
 <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
@@ -67,6 +67,8 @@
 <!-- Phones: floats over the map. Wide screens: the search lives in the panel instead. -->
 <div id="top" class="top"></div>
 
+<div id="live" class="live" hidden role="status"><i></i><b>0</b><span>vehicles moving</span></div>
+
 <div id="mapctl" class="mapctl">
   <div id="busy" class="busy" hidden><span class="spinner"></span><span>Loading lines</span></div>
   <div class="zoom" role="group" aria-label="Zoom">
@@ -79,7 +81,7 @@
 <aside id="panel" class="panel anim" aria-label="Details">
   <header class="appbar">
     <button class="brand" data-act="home" aria-label="Wayfinder, start"><span class="logo"><svg><use href="#i-logo"/></svg></span><span class="word">Wayfinder</span></button>
-    <button class="ghost-round" data-act="settings" aria-label="Settings"><svg class="ic"><use href="#i-gear"/></svg></button>
+    <button class="ghost-round" data-act="settings" aria-label="Settings" title="Settings"><svg class="ic"><use href="#i-gear"/></svg></button>
   </header>
   <div id="grip" class="grip" role="separator" aria-label="Drag to resize"><span></span></div>
   <div id="ptop" class="ptop"></div>

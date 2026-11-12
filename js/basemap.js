@@ -5,21 +5,21 @@ import { networkSources, networkLayers } from "./network.js";
 export { stopIcon } from "./network.js";
 
 export const THEMES = {
-  // "Paper": warm off-white land, ink-dark text, quiet roads; colour is saved for the network.
+  // Light: soft neutral land, white roads, cool water; colour is saved for the network.
   light: {
-    land: "#F3F1EA", water: "#BCD9EC", park: "#DCE8CF", wood: "#D3E2C5", residential: "#EEEBE2", industrial: "#ECE8E1",
-    building: "#E4E0D6", buildingLine: "#D9D4C8", road: "#FFFFFF", roadEdge: "#E2DDD1", major: "#FFFFFF", majorEdge: "#D9D2C3",
-    motorway: "#FBE9BE", motorwayEdge: "#E6CF98", path: "#CFC8B9", rail: "#C4BDB1", boundary: "#BBAFC9",
-    label: "#26272A", labelMuted: "#77736B", halo: "#F7F6F1", waterLabel: "#4F7EA0",
-    casing: "#F7F6F1", stopFill: "#FFFFFF", ring: "#17181B", walk: "#3F4247", bike: "#1E9B55",
+    land: "#EFEFED", water: "#C3DAEE", park: "#D9E8D2", wood: "#CFE2C7", residential: "#EAEAE7", industrial: "#E7E6E3",
+    building: "#E2E1DD", buildingLine: "#D6D5D0", road: "#FFFFFF", roadEdge: "#DDDDD8", major: "#FFFFFF", majorEdge: "#D3D2CC",
+    motorway: "#FFFFFF", motorwayEdge: "#C9C8C2", path: "#CFCEC8", rail: "#C6C5C0", boundary: "#B9B4C8",
+    label: "#27272A", labelMuted: "#71717A", halo: "#F4F4F3", waterLabel: "#5880A8",
+    casing: "#F4F4F3", stopFill: "#FFFFFF", ring: "#18181B", walk: "#3F3F46", bike: "#16A34A",
   },
-  // "Night": deep ink land, roads just above it, the network glows.
+  // Dark: near-black land, roads just above it, so the network glows.
   dark: {
-    land: "#121418", water: "#0D2232", park: "#14241B", wood: "#15261C", residential: "#16191E", industrial: "#181B20",
-    building: "#1F2329", buildingLine: "#272C33", road: "#262B33", roadEdge: "#181B21", major: "#2E343D", majorEdge: "#181B21",
-    motorway: "#3C392F", motorwayEdge: "#24221C", path: "#343A42", rail: "#434A53", boundary: "#544A63",
-    label: "#E1E3E6", labelMuted: "#8B929C", halo: "#121418", waterLabel: "#6E9BBE",
-    casing: "#121418", stopFill: "#F4F4F0", ring: "#08090B", walk: "#D2D5CF", bike: "#4CC27F",
+    land: "#0E0F12", water: "#0A1B29", park: "#0F1F17", wood: "#102118", residential: "#121317", industrial: "#131418",
+    building: "#1A1B20", buildingLine: "#22232A", road: "#1F2128", roadEdge: "#121317", major: "#272A32", majorEdge: "#121317",
+    motorway: "#30333C", motorwayEdge: "#15161A", path: "#2A2C33", rail: "#3A3D45", boundary: "#4B4560",
+    label: "#E4E4E7", labelMuted: "#8A8A93", halo: "#0E0F12", waterLabel: "#6E97BE",
+    casing: "#0E0F12", stopFill: "#F4F4F5", ring: "#09090B", walk: "#D4D4D8", bike: "#4ADE80",
   },
 };
 

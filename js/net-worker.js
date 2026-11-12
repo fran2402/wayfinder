@@ -10,7 +10,7 @@
 //    joined by interchange connectors.
 // The finished map data goes back as JSON bytes, which the map reads in its own worker.
 
-import { ensureLine, colourOf, registry, WIDTH, GROUP, CLASS_ORDER, compareLines, classOf, TRAIN_GREY, BUS_BLUE, rankLines } from "./lines.js";
+import { ensureLine, colourOf, registry, byBase, baseKey, WIDTH, GROUP, CLASS_ORDER, compareLines, classOf, TRAIN_GREY, BUS_BLUE, rankLines } from "./lines.js";
 
 /** Main-line trains (regional, long distance, night) are one grey track on the map, as on metro maps;
  *  suburban rail and metros keep their own colours. Badges keep every line's real colour. */
@@ -122,6 +122,27 @@ function decode(str, precision = 6) {
   return out;
 }
 
+/** The line of this name in this area: lines of one name far apart (every city has a "1") are
+ *  different lines; a route joins the instance whose stops are within ~20 km of its own. */
+function regionalLine(fields, pts) {
+  const cls = classOf(fields.mode);
+  if (!cls || !pts.length) return null;
+  const name = String(fields.name || fields.longName || "?").trim(), base = baseKey(cls, name);
+  const box = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of pts) { box[0] = Math.min(box[0], p.lon); box[1] = Math.min(box[1], p.lat); box[2] = Math.max(box[2], p.lon); box[3] = Math.max(box[3], p.lat); }
+  const near = b => b[0] - 0.28 <= box[2] && b[2] + 0.28 >= box[0] && b[1] - 0.18 <= box[3] && b[3] + 0.18 >= box[1];
+  const list = (byBase.get(base) || []).filter(l => l.bbox && l.region != null);
+  let line = list.find(l => near(l.bbox));
+  if (!line) {
+    line = ensureLine({ ...fields, key: `${base}@${list.length}` });
+    line.region = list.length; line.bbox = [...box];
+  } else {
+    ensureLine({ ...fields, key: line.key });
+    line.bbox = [Math.min(line.bbox[0], box[0]), Math.min(line.bbox[1], box[1]), Math.max(line.bbox[2], box[2]), Math.max(line.bbox[3], box[3])];
+  }
+  return line;
+}
+
 function station(s) {
   const key = s.parentId || s.stopId;
   let st = stations.get(key);
@@ -139,7 +160,8 @@ function ingest(d, zq, box) {
   const lineOf = d.routes.map((r, ri) => {
     if (!classOf(r.mode)) return null;
     const tr = r.transitRoutes[0] || {};
-    const line = ensureLine({ mode: r.mode, name: tr.shortName, colour: colourOfRoute.get(ri), longName: tr.longName });
+    const pts = r.segments.flatMap(sg => [d.stops[sg.from], d.stops[sg.to]]).filter(Boolean);
+    const line = regionalLine({ mode: r.mode, name: tr.shortName, colour: colourOfRoute.get(ri), longName: tr.longName }, pts);
     if (!line) return null;
     seen.add(line.cls);
     line.routes.add(r.routeIdx);
@@ -195,7 +217,8 @@ function ingest(d, zq, box) {
 
 /* ------------------------------ Stations with the same name ------------------------------ */
 
-const STOPWORDS = new Set(["s", "u", "s+u", "bhf", "bf", "station", "stn", "stop", "bahnhof", "gare", "stazione", "estacion", "platform", "gleis", "the"]);
+const STOPWORDS = new Set(["s", "u", "s+u", "bhf", "bf", "station", "stn", "stop", "bahnhof", "gare", "stazione", "estacion", "platform", "gleis", "the",
+  "hoofdstation", "centraal", "central", "centrale", "hauptbahnhof", "hbf", "busstation", "bus", "tram"]);
 function tokens(name) {
   return new Set(name.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\(.*?\)/g, " ").split(/[^a-z0-9+]+/)
     .filter(t => t.length > 1 && !STOPWORDS.has(t)));
@@ -211,6 +234,8 @@ function sameName(a, b) {
     if (!big.has(t) && !(t.length >= 3 && [...big].some(b => b.startsWith(t) || (b.length >= 3 && t.startsWith(b))))) return false;
     chars += t.length;
   }
+  // "Groningen" isn't "Groningen, Zuiderdiep": a one-word name only matches itself.
+  if (small.size === 1 && big.size > 1) return false;
   return chars >= 5 || small.size === big.size;
 }
 function regroup() {
@@ -432,7 +457,7 @@ const enc = new TextEncoder();
 const bytes = features => enc.encode(JSON.stringify({ type: "FeatureCollection", features })).buffer;
 
 function lineInfo(l) {
-  return { key: l.key, nid: l.nid, cls: l.cls, mode: l.mode, name: l.name, raw: l.raw, rawText: l.rawText, longName: l.longName, colour: l.colour,
+  return { key: l.key, nid: l.nid, bbox: l.bbox, cls: l.cls, mode: l.mode, name: l.name, raw: l.raw, rawText: l.rawText, longName: l.longName, colour: l.colour,
     routes: [...l.routes].slice(0, 6), numStops: l.numStops || 0, minZoom: l.minZoom };
 }
 
@@ -484,13 +509,19 @@ async function loadLive(t) {
   const [w, s, e, n] = t.box, f = v => v.toFixed(5), now = Date.now();
   const from = new Date(now - 5 * 60000).toISOString(), to = new Date(now + 30 * 60000).toISOString();
   try {
-    const res = await fetch(`${API}/v6/map/trips?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&startTime=${from}&endTime=${to}&precision=1&language=en`);
+    const res = await fetch(`${API}/v6/map/trips?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&startTime=${from}&endTime=${to}&precision=5&language=en`);
     if (!res.ok) throw new Error(res.status);
-    const names = new Set(), hops = new Set();
+    const names = new Set(), hops = new Set(), trips = new Map();
     for (const seg of await res.json()) {
       const cls = classOf(seg.mode);
       if (!cls) continue;
       if (seg.from?.stopId && seg.to?.stopId) hops.add(seg.from.stopId + ">" + seg.to.stopId);
+      // For the moving vehicles: each trip's hops with their times and shapes.
+      const tr0 = seg.trips[0];
+      if (tr0 && seg.polyline) {
+        if (!trips.has(tr0.tripId)) trips.set(tr0.tripId, { id: tr0.tripId, mode: seg.mode, name: tr0.routeShortName || tr0.displayName, colour: seg.routeColor, rt: seg.realTime, hops: [] });
+        trips.get(tr0.tripId).hops.push({ t0: Date.parse(seg.departure), t1: Date.parse(seg.arrival), poly: seg.polyline, from: seg.from });
+      }
       for (const tr of seg.trips) {
         const dn = norm(tr.routeShortName || tr.displayName);
         names.add(cls + "|" + dn);
@@ -498,11 +529,62 @@ async function loadLive(t) {
         if (cls === "train") { const parts = String(tr.displayName || "").trim().split(/\s+/); names.add(cls + "|" + norm(parts[parts.length - 1])); }
       }
     }
-    live.set(t.key, { box: t.box, zq: t.zq, names, hops, at: now });
+    for (const tr of trips.values()) tr.hops.sort((a, b) => a.t0 - b.t0);
+    live.set(t.key, { box: t.box, zq: t.zq, names, hops, trips, at: now });
   } catch { live.set(t.key, { box: t.box, zq: t.zq, failed: true, at: now }); }
   recomputeRunning();
   render();
 }
+
+/* ------------------------------ Moving vehicles ------------------------------ */
+
+function decodeLL(str) {
+  const out = []; let i = 0, lat = 0, lon = 0;
+  while (i < str.length) {
+    for (let w = 0; w < 2; w++) {
+      let shift = 0, result = 0, b;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const dd = result & 1 ? ~(result >> 1) : result >> 1;
+      if (w === 0) lat += dd; else lon += dd;
+    }
+    out.push([lon / 1e5, lat / 1e5]);
+  }
+  return out;
+}
+function along(h, f) {
+  if (!h.pts) { h.pts = decodeLL(h.poly); h.cum = [0]; for (let i = 1; i < h.pts.length; i++) h.cum.push(h.cum[i - 1] + Math.hypot(h.pts[i][0] - h.pts[i - 1][0], h.pts[i][1] - h.pts[i - 1][1])); }
+  const L = h.cum[h.cum.length - 1] * Math.max(0, Math.min(1, f));
+  let i = 1; while (i < h.cum.length - 1 && h.cum[i] < L) i++;
+  const a = h.pts[i - 1], b = h.pts[i] || a, seg = (h.cum[i] - h.cum[i - 1]) || 1, k = (L - h.cum[i - 1]) / seg;
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+}
+/** Where every vehicle in view is now: along its current hop, or waiting at the stop it reached. */
+function vehicles() {
+  if (!opts.vehicles) return [];
+  const now = Date.now(), [bw, bs, be, bn] = opts.box, out = [], seenTrips = new Set();
+  for (const v of live.values()) {
+    if (!v.trips || v.zq !== opts.bucket) continue;
+    for (const tr of v.trips.values()) {
+      if (seenTrips.has(tr.id)) continue;
+      let h = tr.hops.find(x => x.t0 <= now && now <= x.t1), f;
+      if (h) f = (now - h.t0) / Math.max(1, h.t1 - h.t0);
+      else { h = tr.hops.filter(x => x.t1 < now && now - x.t1 < 150000).pop(); f = 1; }
+      if (!h) continue;
+      const cls = classOf(tr.mode);
+      if (!opts.enabledSet.has(cls) || opts.zoom < DRAW_FROM[cls]) continue;
+      const p = along(h, f);
+      if (p[0] < bw || p[0] > be || p[1] < bs || p[1] > bn) continue;
+      seenTrips.add(tr.id);
+      // The line it belongs to: that name's instance around here.
+      const base = baseKey(cls, String(tr.name || "?").trim());
+      const line = (byBase.get(base) || []).find(l => l.bbox && p[0] > l.bbox[0] - 0.3 && p[0] < l.bbox[2] + 0.3 && p[1] > l.bbox[1] - 0.2 && p[1] < l.bbox[3] + 0.2);
+      out.push({ type: "Feature", geometry: { type: "Point", coordinates: p },
+        properties: { trip: tr.id, n: tr.name, key: line?.key || "", c: line ? drawColour(line) === TRAIN_GREY ? TRAIN_GREY : colourOf(line) : (tr.colour ? "#" + tr.colour : TRAIN_GREY), rt: tr.rt ? 1 : 0, cls } });
+    }
+  }
+  return out;
+}
+setInterval(() => { if (opts.vehicles && live.size) postMessage({ type: "vehicles", features: vehicles() }); }, 1000);
 
 function query(q, a) {
   markRunning();

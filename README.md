@@ -6,6 +6,15 @@ departures, line diagrams and journey planning. Live at **https://fran2402.githu
 No build step: it is plain HTML, CSS and JavaScript modules, so every file can be read and changed
 as it is. Push to `main` and the "Publish site" workflow puts it on GitHub Pages.
 
+## What it does
+
+- Every line in view drawn like a metro map (lines on the same street glued side by side), only the ones running now.
+- Moving vehicles, live: every bus, tram and train on its way; tap one for its trip.
+- Departure boards with live and late times; stations that share a name are one station.
+- Whole-line diagrams with branches; journey planning by public transport, walking or cycling.
+- Links for stops, places and lines; the browser's Back steps through screens.
+- Search as a command palette (`/` or Ctrl/⌘ K); works offline once loaded and installs like an app.
+
 ## Run it locally
 
 ```sh
@@ -36,4 +45,4 @@ map, the loaded network and the current screens.
 
 - Timetables, live times, routing and line shapes: [Transitous](https://transitous.org) (community-run, free; please use it fairly).
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org) © OpenMapTiles.
-- Fonts: Overpass and Overpass Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
+- Fonts: Geist and Geist Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
