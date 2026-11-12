@@ -134,8 +134,22 @@ export function drawLineDiagram(line, lay, meet) {
   const W = X0 + lay.cols * COL + 8, H = box.offsetHeight, x = c => X0 + c * COL, c = colourOf(line);
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   let g = "";
-  // Tracks.
-  for (const s of lay.segs) g += `<line x1="${x(s.col)}" y1="${ys[s.r0]}" x2="${x(s.col)}" y2="${ys[s.r1]}" stroke="${c}" stroke-width="${TRACK}"/>`;
+  // Where each station sits: its home track (the trunk-most) plus any track running straight through.
+  // A branch arriving in another column bends into the station, as on a metro map.
+  const at = lay.rows.map(() => new Map());
+  for (const s of lay.segs) for (const r of [s.r0, s.r1]) at[r].set(s.col, (at[r].get(s.col) || 0) + 1);
+  const stopCols = at.map(m => { const cs = [...m.keys()], h = Math.min(...cs); return new Set(cs.filter(c => c === h || m.get(c) >= 2)); });
+  const anchor = (r, col) => { const cs = stopCols[r]; if (cs.has(col)) return col; return [...cs].reduce((a, b) => Math.abs(b - col) < Math.abs(a - col) ? b : a); };
+  lay.span = stopCols.map(cs => [Math.min(...cs), Math.max(...cs)]);
+  // Tracks: straight down their column, with an S-bend at either end where they leave or join a station.
+  for (const s of lay.segs) {
+    const y0 = ys[s.r0], y1 = ys[s.r1], a0 = anchor(s.r0, s.col), a1 = anchor(s.r1, s.col), bend = Math.min(16, (y1 - y0) / 2);
+    let d = `M${x(a0)} ${y0}`;
+    if (a0 !== s.col) d += ` C${x(a0)} ${y0 + bend * 0.55} ${x(s.col)} ${y0 + bend * 0.45} ${x(s.col)} ${y0 + bend}`;
+    d += ` L${x(s.col)} ${a1 !== s.col ? y1 - bend : y1}`;
+    if (a1 !== s.col) d += ` C${x(s.col)} ${y1 - bend * 0.45} ${x(a1)} ${y1 - bend * 0.55} ${x(a1)} ${y1}`;
+    g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="${TRACK}" stroke-linejoin="round"/>`;
+  }
   // Ends of branches: a stub and the line's badge.
   const label = esc(line.name.length > 4 ? line.name.slice(0, 3) : line.name), fs = label.length > 2 ? 7 : label.length > 1 ? 8.5 : 10;
   for (const e of lay.ends) {
