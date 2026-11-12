@@ -9,8 +9,10 @@ export { stopIcon } from "./network.js";
    Sand/shrub — warm Natural 100–300 · Reserves/tundra — green Natural 100–300 · Roads — asphalt greys. */
 export const THEMES = {
   light: {
-    land: "#F8F9FA", residential: "#F1F3F4", industrial: "#ECEEF0", building: "#E8EAED", buildingLine: "#DADCE0",
-    water: "#A8C7FA", waterLine: "#669DF6", waterLabel: "#185ABC",
+    land: "#EEF2E7", residential: "#EEF0F2", industrial: "#E8EAED", building: "#E1E3E6", buildingLine: "#D3D6DA",
+    water: "#A8C7FA", waterLine: "#A8C7FA", waterLabel: "#185ABC",
+    // Sea depth, from the shallows to the deep ocean (transparent on land).
+    depth: [-9000, "#123E8C", -5000, "#1A57B8", -2500, "#3474D8", -1000, "#5A93EE", -200, "#7FAEF6", -40, "#96BEF8", -12, "rgba(168,199,250,0.6)", -4, "rgba(168,199,250,0)"],
     park: "#C3E6CB", wood: "#A8DAB5", grass: "#CEEAD6",
     medical: "#FCE8E6", sand: "#F5F0E4", shrub: "#EFE8D8", farm: "#F3EEE2", reserve: "#E0EBE4", wetland: "#C9DBCF", ice: "#FFFFFF", rock: "#E1E3E6",
     road: "#E3E5E8", roadEdge: "#D2D5DA", major: "#D2D5DA", majorEdge: "#BDC1C6", motorway: "#BDC1C6", motorwayEdge: "#A6AAB0",
@@ -24,8 +26,9 @@ export const THEMES = {
     crops: { farmland: "#E3EBC2", orchard: "#C9E1AE", vineyard: "#D3E3A6", plant_nursery: "#C6E3B4", farm: "#ECE5D3", meadow: "#D6EBC4", allotments: "#CFE6BC" },
   },
   dark: {
-    land: "#1F2124", residential: "#232528", industrial: "#25282B", building: "#2B2E32", buildingLine: "#33363B",
-    water: "#16314F", waterLine: "#1F4A7A", waterLabel: "#8AB4F8",
+    land: "#1E2320", residential: "#232528", industrial: "#25282B", building: "#2B2E32", buildingLine: "#33363B",
+    water: "#16314F", waterLine: "#16314F", waterLabel: "#8AB4F8",
+    depth: [-9000, "#050F22", -5000, "#081A36", -2500, "#0B2244", -1000, "#0F2A50", -200, "#132E52", -40, "#15304F", -12, "rgba(22,49,79,0.6)", -4, "rgba(22,49,79,0)"],
     park: "#1B3324", wood: "#1E3A28", grass: "#1D3125",
     medical: "#3A2626", sand: "#2E2B24", shrub: "#2B2924", farm: "#292824", reserve: "#212D27", wetland: "#22332A", ice: "#2F3237", rock: "#2A2C30",
     road: "#3C4043", roadEdge: "#2A2D30", major: "#4A4E52", majorEdge: "#2A2D30", motorway: "#5F6368", motorwayEdge: "#2A2D30",
@@ -69,7 +72,7 @@ export function buildStyle(theme) {
       // The ground coloured by height, so open country isn't a blank grey.
       { id: "relief", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.relief], "color-relief-opacity": z(4, 0.9, 12, 0.75, 15, 0.45) } },
       { id: "landuse-residential", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 9, filter: cls("residential", "suburb", "neighbourhood"),
-        paint: { "fill-color": t.residential, "fill-opacity": z(9, 0, 12, 1) } },
+        paint: { "fill-color": t.residential, "fill-opacity": z(9, 0.5, 12, 1) } },
       { id: "landuse-industrial", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("industrial", "commercial", "retail", "railway"),
         paint: { "fill-color": t.industrial } },
       // Natural ground: sand and beaches, shrub and heath, farmland, wetland, ice and rock.
@@ -91,6 +94,8 @@ export function buildStyle(theme) {
       // Medical.
       { id: "landuse-medical", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 12, filter: cls("hospital"), paint: { "fill-color": t.medical } },
       { id: "water", type: "fill", source: "omt", "source-layer": "water", filter: ["!=", ["get", "brunnel"], "tunnel"], paint: { "fill-color": t.water } },
+      // How deep the sea is (the elevation tiles carry the sea floor too).
+      { id: "depth", type: "color-relief", source: "dem", paint: { "color-relief-color": ["interpolate", ["linear"], ["elevation"], ...t.depth], "color-relief-opacity": 0.9 } },
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: notTunnel,
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },

@@ -32,6 +32,7 @@ const map = new maplibregl.Map({
   container: "map", style: buildStyle(themeNow()), center: START.center, zoom: START.zoom, hash: "map",
   attributionControl: false, dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, minZoom: 3, maxZoom: 19, fadeDuration: 120,
 });
+map.on("error", e => console.warn("Map:", e.error?.message || e));
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '<a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>' }), "bottom-right");
