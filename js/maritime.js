@@ -6,7 +6,6 @@
 
 import { ensure, ensureAll } from "./icons.js";
 import { debounce } from "./util.js";
-import { skiFeatures } from "./ski.js";
 
 // Public Overpass servers: often busy, so each request tries them in turn (and remembers which one answered).
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
@@ -299,8 +298,6 @@ function featuresOf(elements) {
   for (const el of elements) {
     const t = el.tags || {}, type = t["seamark:type"] || "";
     const geom = el.geometry?.map(p => [p.lon, p.lat]);
-    const ski = !type && skiFeatures(el, geom, centroid);
-    if (ski) { out.push(...ski); continue; }
     const style = AREA_STYLE[type];
     if (geom && geom.length > 1 && style) {
       const closed = geom.length > 3 && geom[0][0] === geom.at(-1)[0] && geom[0][1] === geom.at(-1)[1];
@@ -325,8 +322,7 @@ function centroid(g) { let x = 0, y = 0; for (const p of g) { x += p[0]; y += p[
 
 export class SeaMarks {
   constructor(map) {
-    // Sea marks, and (in the same requests) ski runs and resorts. `on` while either is wanted.
-    this.map = map; this.on = true; this.sea = true; this.ski = true;
+    this.map = map; this.on = true;
     this.cells = new Map(); // "x,y" → "loading" | "done" | time of the last failure
     this.byId = new Map(); this.queue = []; this.running = 0; this.lit = [];
     this.server = 0;
@@ -384,8 +380,8 @@ export class SeaMarks {
   async fetchArea(bbox) {
     const bb = `(${bbox.join(",")})`;
     const q = `[out:json][timeout:25];(node["seamark:type"]${bb};node["blue_flag"="yes"]${bb};node["man_made"="lighthouse"]${bb};node["leisure"="slipway"]${bb};)->.n;`
-      + `(way["seamark:type"]${bb};way["blue_flag"="yes"]${bb};way["man_made"="lighthouse"]${bb};way["piste:type"]${bb};way["landuse"="winter_sports"]${bb};)->.w;(relation["seamark:type"]${bb};relation["blue_flag"="yes"]${bb};)->.r;.n out qt;.w out geom qt;.r out center tags qt;`;
-    const key = "https://wayfinder.cache/sea/v2/" + bbox.join("_");
+      + `(way["seamark:type"]${bb};way["blue_flag"="yes"]${bb};way["man_made"="lighthouse"]${bb};)->.w;(relation["seamark:type"]${bb};relation["blue_flag"="yes"]${bb};)->.r;.n out qt;.w out geom qt;.r out center tags qt;`;
+    const key = "https://wayfinder.cache/sea/v3/" + bbox.join("_");
     let cache = null;
     try { cache = await caches.open("wayfinder-sea"); const hit = await cache.match(key); if (hit && Date.now() - +hit.headers.get("x-at") < 7 * 864e5) return hit.json(); } catch { cache = null; }
     for (let i = 0; i < OVERPASS.length; i++) {
@@ -412,27 +408,23 @@ export class SeaMarks {
   fallback() {
     if (!this.map.getLayer("seamarks-tiles")) return;
     const z = this.map.getZoom();
-    let need = (this.sea || this.ski) && z >= 9;
+    let need = this.on && z >= 9;
     if (need && z >= 10) {
       const cells = this.inView();
       need = cells.length > 60 || cells.some(([x, y]) => this.cells.get(x + "," + y) !== "done");
     }
-    this.map.setLayoutProperty("seamarks-tiles", "visibility", need && this.sea ? "visible" : "none");
-    if (this.map.getLayer("pistes-tiles")) this.map.setLayoutProperty("pistes-tiles", "visibility", need && this.ski ? "visible" : "none");
+    this.map.setLayoutProperty("seamarks-tiles", "visibility", need ? "visible" : "none");
   }
   apply() {
-    const pts = [], lines = [], skiPts = [], skiLines = [];
+    const pts = [], lines = [];
     this.lit = [];
     for (const f of this.byId.values()) {
       const g = { type: "Feature", geometry: f.geometry, properties: f.properties };
-      if (f.ski) { (f.geometry.type === "Point" ? skiPts : skiLines).push(g); continue; }
       (f.geometry.type === "Point" ? pts : lines).push(g);
       if (f.lights?.length) this.lit.push(f);
     }
     this.map.getSource("sea-marks")?.setData({ type: "FeatureCollection", features: pts });
     this.map.getSource("sea-lines")?.setData({ type: "FeatureCollection", features: lines });
-    this.map.getSource("ski-lines")?.setData({ type: "FeatureCollection", features: skiLines });
-    this.map.getSource("ski-points")?.setData({ type: "FeatureCollection", features: skiPts });
     this.arcs();
     this.fallback();
   }

@@ -1,9 +1,13 @@
 name: Publish site
 
-# The site is plain HTML, CSS and JavaScript: nothing to build, it is published as it is.
+# The site is plain HTML, CSS and JavaScript, published as it is — plus one data file made here:
+# data/ski.pmtiles, the world's ski runs, lifts and ski areas as vector tiles (from OpenSkiMap's daily
+# OpenStreetMap extract; see tools/build-ski.sh). It's rebuilt once a week and reused in between.
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 3 * * 1" # Mondays: fresh ski data
   workflow_dispatch:
 
 permissions:
@@ -23,6 +27,19 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - id: week
+        run: echo "key=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - id: ski
+        uses: actions/cache@v4
+        with:
+          path: data/ski.pmtiles
+          key: ski-${{ steps.week.outputs.key }}-${{ hashFiles('tools/build-ski.py', 'tools/build-ski.sh') }}
+      - name: Build the ski tiles
+        if: steps.ski.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tippecanoe
+          tools/build-ski.sh /tmp/ski data/ski.pmtiles
       # Pages has to be switched on once by hand: Settings → Pages → Source: "GitHub Actions".
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

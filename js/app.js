@@ -760,7 +760,7 @@ function applyLayers() {
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
   for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
-  sea.sea = settings.sea; sea.ski = settings.ski; sea.on = settings.sea || settings.ski;
+  sea.on = settings.sea;
   if (sea.on) { sea.apply(); sea.update(); } else sea.fallback();
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
