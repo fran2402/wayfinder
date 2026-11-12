@@ -47,16 +47,7 @@ export function preloadSkiIcons() {
 
 /* ============================== The data ============================== */
 
-let registered = false;
-/** MapLibre reads the ski tiles out of one file, by byte ranges. */
-function register() {
-  if (registered || typeof pmtiles === "undefined") return;
-  registered = true;
-  maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
-}
-
 export function skiSources() {
-  register();
   return { ski: { type: "vector", url: "pmtiles://" + new URL("data/ski.pmtiles", location.href).href, maxzoom: 13,
     attribution: '<a href="https://openskimap.org" target="_blank" rel="noopener">OpenSkiMap</a>' } };
 }

@@ -4,6 +4,9 @@
 
 import { THEMES } from "./basemap.js";
 
+// Ski runs and sea marks come as single vector-tile files (PMTiles), read by byte ranges.
+if (typeof pmtiles !== "undefined") maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
+
 const worker = new Worker(new URL("./tile-worker.js", import.meta.url));
 const pending = new Map();
 let seq = 0;

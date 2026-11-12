@@ -10,12 +10,14 @@
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
-import { SeaMarks, preloadSeaIcons, SEA_LAYER_IDS } from "./maritime.js";
+import { SeaArcs, preloadSeaIcons, seaIcon, seaKind, SEA_LAYER_IDS, SEA_CLICK_LAYERS } from "./maritime.js";
+import { iconDef } from "./seamarks-core.js";
 import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween, FLIGHTS_RELAY, airportBoard, airportSchedule } from "./aviation.js";
 import { boardHtml, liveRows, markNow } from "./fids.js";
 import { preloadStreetIcons } from "./streets.js";
 import { preloadSkiIcons, SKI_LAYER_IDS } from "./ski.js";
 import { attach as attachIcons } from "./icons.js";
+import { preloadPlaceIcons, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
@@ -47,17 +49,18 @@ map.keyboard.disableRotation();
 map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '<a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>' }), "bottom-right");
 map.on("styleimagemissing", e => {
   if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
-  if (/^(sm-|rwy-|air-|shield-|road-)/.test(e.id)) return; // drawn as SVG (icons.js), on their way
+  if (e.id.startsWith("sm-")) return seaIcon(e.id);
+  if (/^(rwy-|air-|shield-|road-|ski-|pl-)/.test(e.id)) return; // drawn as SVG (icons.js), on their way
   // A place kind the base map's sprite has no icon for: a small dot instead.
   const c = document.createElement("canvas"); c.width = c.height = 24; const g = c.getContext("2d");
   g.fillStyle = "#fff"; g.beginPath(); g.arc(12, 12, 8, 0, 7); g.fill(); g.fillStyle = "#80868B"; g.beginPath(); g.arc(12, 12, 5.5, 0, 7); g.fill();
   map.addImage(e.id, { width: 24, height: 24, data: g.getImageData(0, 0, 24, 24).data }, { pixelRatio: 2 });
 });
 attachIcons(map);
-preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons();
+preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); preloadPlaceIcons();
 
 const net = new Network(map);
-const sea = new SeaMarks(map);
+const sea = new SeaArcs(map);
 new Runways(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
 
@@ -171,7 +174,7 @@ let stack = [{ t: "explore" }];
 const screen = () => stack[stack.length - 1];
 function screenParam(s) {
   if (s.t === "stop") return `stop:${s.ids[0]}~${s.name || ""}`;
-  if (s.t === "place") return `place:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${s.name || ""}`;
+  if (s.t === "place") return `place:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${s.name || ""}${s.osm ? `|${s.osm.type}/${s.osm.id}|${s.kind?.key || ""}` : ""}`;
   if (s.t === "airport") return `airport:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${[s.name, s.iata || "", s.icao || "", s.ele ?? ""].join("|")}`;
   if (s.t === "line") return `line:${s.key}${s.tripId ? "~" + s.tripId : ""}`;
   return "";
@@ -541,6 +544,7 @@ VIEWS.place = {
       const d = await api.departures({ center: [s.lon, s.lat], radius: 500, n: 60 });
       return { deps: departures(d.stopTimes), stations: stationsFrom(d.stopTimes, [s.lon, s.lat]).slice(0, 4) };
     });
+    if (s.osm) load(s, "tags", () => osmTags(s.osm));
     if (s.needsName) load(s, "rev", async () => { const a = (await api.reverse([s.lon, s.lat]))[0]; if (a) { s.name = a.name; s.sub = subOf(a); } return true; });
   },
   html(s) {
@@ -550,13 +554,15 @@ VIEWS.place = {
     const tabs = [["overview", "Overview"], ["transit", "Transit"], ["photos", "Photos"], ["reviews", "Reviews"]];
     let body = "";
     if (s.tab === "overview") {
-      body = `<div class="card list info">
-          <div class="irow">${icon("pin", "s")}<span><b>${esc(s.name)}</b><small>${esc(s.sub || "")}</small></span></div>
+      const t = s.tags, hours = hoursLines(t?.opening_hours), rows = [...(s.light ? [["sun", "Light", s.light]] : []), ...(t ? detailRows(t) : [])];
+      const row = ([ic, label, value, href]) => `<div class="irow">${icon(ic, "s")}<span><small>${esc(label)}</small>${href ? `<a href="${esc(href)}" target="_blank" rel="noopener"><b>${esc(value)}</b></a>` : `<b>${esc(value)}</b>`}</span></div>`;
+      body = s.osm && !t && !s.tagsErr ? loading(4)
+        : (hours.length ? `<div class="card list info hours"><div class="irow">${icon("clock", "s")}<span><small>Opening hours</small>${hours.map(h => `<b>${esc(h)}</b>`).join("")}</span></div></div>` : "")
+        + `<div class="card list info">
+          ${rows.length ? rows.map(row).join("") : `<div class="irow">${icon("pin", "s")}<span><b>${esc(s.name)}</b><small>${esc(s.sub || "")}</small></span></div>`}
           <div class="irow">${icon("compass", "s")}<span class="mono">${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}</span></div>
-          <div class="irow">${icon("clock", "s")}<span>Opening hours</span>${soon()}</div>
-          <div class="irow">${icon("globe", "s")}<span>Website</span>${soon()}</div>
-          <div class="irow">${icon("phone", "s")}<span>Phone</span>${soon()}</div>
-          <div class="irow">${icon("wheel", "s")}<span>Accessibility</span>${soon()}</div></div>`
+          ${!t ? `<div class="irow">${icon("clock", "s")}<span>Opening hours</span>${soon()}</div>` : ""}
+          ${s.osm ? `<div class="irow">${icon("map", "s")}<span><small>Details from</small><a href="https://www.openstreetmap.org/${s.osm.type}/${s.osm.id}" target="_blank" rel="noopener"><b>OpenStreetMap</b></a></span></div>` : ""}</div>`
         + (n?.stations?.length ? `${section("Getting there by public transport")}<div class="card list">${n.stations.slice(0, 2).map(st => stationRow(st, `${distance(st.d)} · ${walkMin(st.d)} min walk`)).join("")}</div>` : "");
     } else if (s.tab === "transit") {
       body = s.nearErr ? failed(s.nearErr) : !n ? loading(3) : !n.stations.length ? `<div class="card muted">No public transport within 500 m.</div>`
@@ -565,13 +571,15 @@ VIEWS.place = {
     } else {
       body = `<div class="card muted soonbox">${icon(s.tab === "photos" ? "camera" : "star")}<b>${s.tab === "photos" ? "Photos" : "Reviews"} are coming</b><span>Open data sources for them are being looked at.</span></div>`;
     }
-    return `<header class="title"><h1>${esc(s.name)}</h1><p>${esc([s.sub, d != null ? `${distance(d)} away` : null].filter(Boolean).join(" · "))}</p></header>
+    const cuisine = s.tags?.cuisine ? s.tags.cuisine.split(";")[0].replace(/_/g, " ") : null;
+    return `<header class="title${s.kind ? " withicon" : ""}">${s.kind ? `<span class="picon">${s.kind.svg ? s.kind.svg.replace(/width="[\d.]+" height="[\d.]+"/, 'height="44"') : placeSvg(s.kind.key, 44)}</span>` : ""}<div><h1>${esc(s.name)}</h1>
+      <p>${s.kind ? `<b style="color:${s.kind.colour}">${esc(s.kind.label)}${cuisine ? " · " + esc(cuisine) : ""}</b>` : ""}${esc([s.kind ? null : s.sub, d != null ? `${distance(d)} away` : null].filter(Boolean).map(x => (s.kind ? " · " : "") + x).join(s.kind ? "" : " · "))}</p></div></header>
       <div class="circs">
         <button class="circ primary" data-act="dir-place"><span>${icon("dir")}</span>Directions</button>
         <button class="circ" data-act="save-place" aria-pressed="${isSaved}"><span>${icon(isSaved ? "heart" : "save")}</span>${isSaved ? "Saved" : "Save"}</button>
         <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
         <button class="circ" data-soon="What's nearby"><span>${icon("compass")}</span>Nearby</button>
-        <button class="circ" data-soon="Calling places"><span>${icon("phone")}</span>Call</button></div>
+        ${(() => { const ph = s.tags && (s.tags.phone || s.tags["contact:phone"]); return ph ? `<a class="circ" href="tel:${esc(ph.split(";")[0].replace(/\s+/g, ""))}"><span>${icon("phone")}</span>Call</a>` : `<button class="circ" data-soon="Calling places"><span>${icon("phone")}</span>Call</button>`; })()}</div>
       <div class="tabs" role="tablist">${tabs.map(([k, label]) => `<button role="tab" data-ptab="${k}" aria-selected="${s.tab === k}">${label}</button>`).join("")}</div>
       ${body}`;
   },
@@ -760,8 +768,7 @@ function applyLayers() {
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
   for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
-  sea.on = settings.sea;
-  if (sea.on) { sea.apply(); sea.update(); } else sea.fallback();
+  sea.on = settings.sea; sea.update();
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
 map.on("style.load", applyLayers);
@@ -1151,6 +1158,10 @@ map.on("click", e => {
   if (st.length) { const f = st[0].properties; return go({ t: "stop", ids: String(f.keys).split("\n"), name: f.name, lon: st[0].geometry.coordinates[0], lat: st[0].geometry.coordinates[1] }); }
   const ap = map.queryRenderedFeatures(tapBox(e.point, 12), { layers: AIR_CLICK_LAYERS.filter(id => map.getLayer(id)) })[0];
   if (ap) return openAirport(ap.properties, ap.geometry.coordinates);
+  const pl = map.queryRenderedFeatures(tapBox(e.point, 10), { layers: ["poi-major", "poi-minor"].filter(id => map.getLayer(id)) })[0];
+  if (pl) return openPlace(pl);
+  const sm = map.queryRenderedFeatures(tapBox(e.point, 10), { layers: SEA_CLICK_LAYERS.filter(id => map.getLayer(id)) })[0];
+  if (sm) return openSeaMark(sm);
   const keys = [...new Set(map.queryRenderedFeatures(tapBox(e.point, 11), { layers: ["net-lines"] }).flatMap(f => net.keysOf(f.properties.lines)))];
   if (keys.length === 1) return go({ t: "line", key: keys[0] });
   if (keys.length > 1) return go({ t: "pick", keys });
@@ -1161,6 +1172,19 @@ map.on("click", e => {
     if (best && best.d < 6000) return openAirport(best.f.properties, best.f.geometry.coordinates);
   }
 });
+function openPlace(f) {
+  const p = f.properties, [lon, lat] = f.geometry.coordinates, kind = kindOf(p);
+  go({ t: "place", name: p["name:en"] || p.name_en || p.name || kind.label, sub: kind.label, lon, lat, osm: osmOf(f.id), kind });
+}
+function openSeaMark(f) {
+  const p = f.properties, [lon, lat] = f.geometry.coordinates, o = String(p.oid || "");
+  const osm = o ? { type: { n: "node", w: "way", r: "relation" }[o[0]], id: +o.slice(1) } : null;
+  const def = iconDef(p.icon)?.();
+  const label = String(p.label || "").split("\n");
+  const what = seaKind(p.icon);
+  go({ t: "place", name: p.name || what, sub: what, lon, lat, osm, kind: { key: "other", colour: "#174EA6", label: what, svg: def?.svg },
+    light: label.length > 1 ? label.at(-1) : p.name ? null : label[0] || null });
+}
 function openAirport(p, [lon, lat]) {
   go({ t: "airport", name: p["name:en"] || p.name_en || p.name || "Airport", iata: p.iata || null, icao: p.icao || null, ele: p.ele ?? null, lon, lat });
 }
@@ -1171,7 +1195,7 @@ map.on("mousemove", e => {
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
     if (!map.getLayer("stations")) return;
-    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
+    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "poi-major", "poi-minor", ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
   });
 });
 
@@ -1191,7 +1215,11 @@ if (deepLink) {
   const v = decodeURIComponent(deepLink.slice(2)), kind = v.slice(0, v.indexOf(":")), [id, name] = v.slice(v.indexOf(":") + 1).split("~");
   if (kind === "stop") go({ t: "stop", ids: [id], name: name || null, lon: null, lat: null });
   else if (kind === "airport") { const [lat, lon] = id.split(",").map(Number), [n, iata, icao, ele] = (name || "").split("|"); go({ t: "airport", name: n || "Airport", iata: iata || null, icao: icao || null, ele: ele === "" || ele == null ? null : +ele, lon, lat }); }
-  else if (kind === "place") { const [lat, lon] = id.split(",").map(Number); go({ t: "place", name: name || "Place", sub: "", lon, lat }); }
+  else if (kind === "place") {
+    const [lat, lon] = id.split(",").map(Number), [n, el, key] = (name || "").split("|"), [type, oid] = (el || "").split("/");
+    const k = key ? kindOf({ class: key.split("/")[0], subclass: key.split("/")[1] }) : null;
+    go({ t: "place", name: n || "Place", sub: k?.label || "", lon, lat, osm: oid ? { type, id: +oid } : null, kind: k });
+  }
   else if (kind === "line") {
     const tryOpen = () => { if (registry.get(id)) { go({ t: "line", key: id, tripId: name || null }); return true; } return false; };
     if (!tryOpen()) { const t = setInterval(() => { if (tryOpen()) clearInterval(t); }, 800); setTimeout(() => clearInterval(t), 30000); }

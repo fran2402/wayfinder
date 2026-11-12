@@ -6,6 +6,7 @@ import { seaSources, seaLayers } from "./maritime.js";
 import { airSources, airLayers } from "./aviation.js";
 import { streetLayers, streetLabels } from "./streets.js";
 import { skiSources, skiLayers } from "./ski.js";
+import { placeIcon, placeTextColour, HIDDEN } from "./places.js";
 export { stopIcon } from "./network.js";
 
 /* The map palette:
@@ -221,11 +222,11 @@ export function buildStyle(theme) {
       // Places: shops, food, culture, health… (transit stops come from the network instead).
       ...[["poi-major", ["<", ["get", "rank"], 8], 14.5], ["poi-minor", [">=", ["get", "rank"], 8], 16.5]].map(([id, rank, minzoom]) => ({
         id, type: "symbol", source: "omt", "source-layer": "poi", minzoom,
-        filter: ["all", ["==", ["geometry-type"], "Point"], rank, ["!", ["match", ["get", "class"], ["bus", "rail", "railway", "tram", "ferry_terminal", "aerialway", "harbor"], true, false]]],
-        layout: { "icon-image": ["match", ["get", "subclass"], ["florist", "furniture"], ["get", "subclass"], ["get", "class"]], "icon-size": 0.9,
-          "text-field": NAME, "text-font": ["Noto Sans Regular"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 0.7], "text-max-width": 8,
-          "symbol-sort-key": ["get", "rank"] },
-        paint: { "text-color": t.poi, "text-halo-color": t.halo, "text-halo-width": 1.3, "icon-opacity": 0.9 },
+        filter: ["all", ["==", ["geometry-type"], "Point"], rank, ["!", ["in", ["get", "class"], ["literal", HIDDEN]]]],
+        layout: { "icon-image": placeIcon, "icon-size": ["interpolate", ["linear"], ["zoom"], minzoom, 0.72, 18, 0.92],
+          "text-field": NAME, "text-font": ["Noto Sans Regular"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 0.95], "text-max-width": 8,
+          "text-optional": true, "symbol-sort-key": ["get", "rank"] },
+        paint: { "text-color": placeTextColour(theme === "dark"), "text-halo-color": t.halo, "text-halo-width": 1.4 },
       })),
       // Marinas and ferry terminals (base map), Blue Flags, lighthouses, harbours and slipways (OpenStreetMap, live).
       { id: "sea-poi", type: "symbol", source: "omt", "source-layer": "poi", minzoom: 12, filter: ["all", ["==", ["geometry-type"], "Point"], cls("harbor", "ferry_terminal")],

@@ -1,13 +1,16 @@
 name: Publish site
 
-# The site is plain HTML, CSS and JavaScript, published as it is — plus one data file made here:
-# data/ski.pmtiles, the world's ski runs, lifts and ski areas as vector tiles (from OpenSkiMap's daily
-# OpenStreetMap extract; see tools/build-ski.sh). It's rebuilt once a week and reused in between.
+# The site is plain HTML, CSS and JavaScript, published as it is — plus two data files made here:
+#   data/ski.pmtiles — the world's ski runs, lifts and ski areas (OpenSkiMap's daily OpenStreetMap
+#                      extract; tools/build-ski.sh). Quick: rebuilt once a week, reused in between.
+#   data/sea.pmtiles — the world's sea marks (OpenStreetMap through Overpass; tools/build-sea.sh).
+#                      Slow: rebuilt by the weekly run (or by hand: Actions → Publish site → Run workflow);
+#                      every other publish reuses the latest one.
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "17 3 * * 1" # Mondays: fresh ski data
+    - cron: "17 3 * * 1" # Mondays: fresh ski and sea data
   workflow_dispatch:
 
 permissions:
@@ -17,11 +20,12 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -29,6 +33,10 @@ jobs:
       - uses: actions/checkout@v4
       - id: week
         run: echo "key=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Install tippecanoe
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tippecanoe
+
+      # Ski runs: cached for the week.
       - id: ski
         uses: actions/cache@v4
         with:
@@ -36,10 +44,28 @@ jobs:
           key: ski-${{ steps.week.outputs.key }}-${{ hashFiles('tools/build-ski.py', 'tools/build-ski.sh') }}
       - name: Build the ski tiles
         if: steps.ski.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq tippecanoe
-          tools/build-ski.sh /tmp/ski data/ski.pmtiles
+        run: tools/build-ski.sh /tmp/ski data/ski.pmtiles
+
+      # Sea marks: the latest built file, rebuilt on the weekly run, by hand, or if there's none yet.
+      - id: sea
+        uses: actions/cache/restore@v4
+        with:
+          path: data/sea.pmtiles
+          key: sea-${{ github.run_id }}
+          restore-keys: sea-
+      - name: Build the sea tiles
+        id: seabuild
+        if: github.event_name != 'push' || steps.sea.outputs.cache-matched-key == ''
+        continue-on-error: true
+        timeout-minutes: 240
+        run: tools/build-sea.sh /tmp/sea data/sea.pmtiles
+      - name: Keep the new sea tiles
+        if: steps.seabuild.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: data/sea.pmtiles
+          key: sea-${{ github.run_id }}
+
       # Pages has to be switched on once by hand: Settings → Pages → Source: "GitHub Actions".
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
