@@ -2,6 +2,9 @@
 // styled quietly so the transport network reads first. Labels are in English where OSM has it.
 
 import { networkSources, networkLayers } from "./network.js";
+import { seaSources, seaLayers } from "./maritime.js";
+import { airSources, airLayers } from "./aviation.js";
+import { streetLayers, streetLabels } from "./streets.js";
 export { stopIcon } from "./network.js";
 
 /* The map palette:
@@ -15,7 +18,8 @@ export const THEMES = {
     depth: [-9000, "#0D3A80", -6000, "#174EA6", -4000, "#185ABC", -2500, "#1A73E8", -1500, "#4285F4", -700, "#669DF6", -250, "#8AB4F8", -80, "#A8C7FA", -25, "#BCD5FB", -6, "rgba(188,213,251,0.5)", -2, "rgba(188,213,251,0)"],
     park: "#C3E6CB", wood: "#A8DAB5", grass: "#CEEAD6",
     medical: "#FCE8E6", sand: "#F5F0E4", shrub: "#EFE8D8", farm: "#F3EEE2", reserve: "#E0EBE4", wetland: "#C9DBCF", ice: "#FFFFFF", rock: "#E1E3E6",
-    road: "#E3E5E8", roadEdge: "#D2D5DA", major: "#D2D5DA", majorEdge: "#BDC1C6", motorway: "#BDC1C6", motorwayEdge: "#A6AAB0",
+    road: "#E3E5E8", roadEdge: "#CDD0D5", major: "#D2D5DA", mid: "#DADCE0", majorEdge: "#B4B8BE", motorway: "#BDC1C6", motorwayEdge: "#9AA0A6", pedestrian: "#EEEFF1",
+    tunnel: "#F4F5F7", tunnelEdge: "#9AA0A6", bridgeEdge: "#80868B", taxiway: "#A9ADB3", pierLine: "#C4C7CC",
     path: "#C6CACF", rail: "#B4B8BE", boundary: "#9AA0A6",
     label: "#3C4043", labelMuted: "#70757A", halo: "#FFFFFF", poi: "#5F6368",
     casing: "#FFFFFF", stopFill: "#FFFFFF", ring: "#1A1A1A", walk: "#1A1A1A", bike: "#1E8E3E",
@@ -24,7 +28,7 @@ export const THEMES = {
     // Crops by the colour of their leaves.
     ferry: "#1A73E8", seaBorder: "#669DF6", coast: "#8AB4F8", seaLabel: "#185ABC",
     edu: "#FEF7E0", eduLine: "#F0D27A", cemetery: "#D9E5D6", cemLine: "#9DB09A", military: "#FCE8E6", milLine: "#D93025", pitch: "#B7DFB9", pitchLine: "#FFFFFF",
-    pool: "#8FDCF5", poolLine: "#3BA5D8", npLine: "#1E8E3E", reserveLine: "#4CAF6A", beachLine: "#4A90E2", apron: "#E6E8EC", runway: "#C4C7CC", runwayLine: "#FFFFFF",
+    pool: "#8FDCF5", poolLine: "#3BA5D8", npLine: "#1E8E3E", reserveLine: "#4CAF6A", beachLine: "#4A90E2", apron: "#DDE0E4", runway: "#8E9399", runwayLine: "#FFFFFF",
     zoo: "#E6EFD3", zooLine: "#98B56F", border: "#8E7CA8", borderHalo: "#D7CCE6", region: "#A99BBF", pier: "#F8F9FA", dam: "#C4C7CC",
     crops: { farmland: "#E3EBC2", orchard: "#C9E1AE", vineyard: "#D3E3A6", plant_nursery: "#C6E3B4", farm: "#ECE5D3", meadow: "#D6EBC4", allotments: "#CFE6BC" },
   },
@@ -34,14 +38,15 @@ export const THEMES = {
     depth: [-9000, "#04101F", -6000, "#06152A", -4000, "#081B35", -2500, "#0B2242", -1500, "#0E294D", -700, "#123058", -250, "#163762", -80, "#1A3D6A", -25, "#1E4372", -6, "rgba(30,67,114,0.5)", -2, "rgba(30,67,114,0)"],
     park: "#1B3324", wood: "#1E3A28", grass: "#1D3125",
     medical: "#3A2626", sand: "#2E2B24", shrub: "#2B2924", farm: "#292824", reserve: "#212D27", wetland: "#22332A", ice: "#2F3237", rock: "#2A2C30",
-    road: "#3C4043", roadEdge: "#2A2D30", major: "#4A4E52", majorEdge: "#2A2D30", motorway: "#5F6368", motorwayEdge: "#2A2D30",
+    road: "#3C4043", roadEdge: "#2A2D30", major: "#4A4E52", mid: "#44484C", majorEdge: "#2A2D30", motorway: "#5F6368", motorwayEdge: "#2A2D30", pedestrian: "#34373A",
+    tunnel: "#2C2F33", tunnelEdge: "#5F6368", bridgeEdge: "#141518", taxiway: "#4A4E54", pierLine: "#3C4043",
     path: "#45494E", rail: "#55595E", boundary: "#6E737A",
     label: "#E8EAED", labelMuted: "#9AA0A6", halo: "#1F2124", poi: "#BDC1C6",
     casing: "#1F2124", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#81C995",
     relief: [-50, "#1C2A1F", 0, "#1C2A1F", 100, "#1F2C1F", 250, "#252D1F", 500, "#2B2D20", 800, "#302B20", 1200, "#352B21", 1700, "#382C24", 2300, "#3A302B", 2900, "#3E3836", 3500, "#4A4645", 4200, "#5C5A5A"],
     ferry: "#8AB4F8", seaBorder: "#4A7CC7", coast: "#2B5C93", seaLabel: "#8AB4F8",
     edu: "#2E2B20", eduLine: "#6B5B2A", cemetery: "#24302A", cemLine: "#4E6152", military: "#3A2424", milLine: "#E57373", pitch: "#25402B", pitchLine: "#6C8F72",
-    pool: "#1B5A75", poolLine: "#3D8FB8", npLine: "#5FBF7A", reserveLine: "#4E9E68", beachLine: "#5B8FD0", apron: "#2C2F34", runway: "#45494F", runwayLine: "#6E737A",
+    pool: "#1B5A75", poolLine: "#3D8FB8", npLine: "#5FBF7A", reserveLine: "#4E9E68", beachLine: "#5B8FD0", apron: "#2C2F34", runway: "#45494F", runwayLine: "#C4C7CC",
     zoo: "#26301F", zooLine: "#5C7044", border: "#9C8BB8", borderHalo: "#3A3248", region: "#7A6E90", pier: "#2A2D31", dam: "#55595E",
     crops: { farmland: "#2A3021", orchard: "#233322", vineyard: "#28331F", plant_nursery: "#213322", farm: "#2B2924", meadow: "#22301F", allotments: "#24321F" },
   },
@@ -53,13 +58,7 @@ const cls = (...v) => ["match", ["get", "class"], v, true, false];
 
 export function buildStyle(theme) {
   const t = THEMES[theme];
-  const net = networkLayers(t);
-  const road = (id, filter, minzoom, edge, fill, widths) => [
-    { id: id + "-casing", type: "line", source: "omt", "source-layer": "transportation", minzoom, filter,
-      layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": edge, "line-width": z(...widths.flatMap(([zz, w]) => [zz, w + 1.6])) } },
-    { id, type: "line", source: "omt", "source-layer": "transportation", minzoom, filter,
-      layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": fill, "line-width": z(...widths.flatMap(([zz, w]) => [zz, w])) } },
-  ];
+  const net = networkLayers(t), sea = seaLayers(t), air = airLayers(t), streets = streetLayers(t);
   const notTunnel = ["!=", ["get", "brunnel"], "tunnel"];
   return {
     version: 8,
@@ -72,10 +71,8 @@ export function buildStyle(theme) {
         attribution: 'Terrain <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen / AWS</a>' },
       // Sea depth, made in tile-worker.js: the sea floor (only in the zoom ≤ 8 elevation tiles) spline-interpolated and coloured.
       depth: { type: "raster", tiles: [`wfdepth://${theme}/{z}/{x}/{y}`], tileSize: 256, maxzoom: 14 },
-      // Sea marks (buoys, beacons, lights and their sectors, harbours, anchorages, wrecks…) from OpenSeaMap.
-      seamarks: { type: "raster", tiles: ["https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png"], tileSize: 256, minzoom: 9, maxzoom: 18,
-        attribution: '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a>' },
-      "sea-places": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
+      ...seaSources(),
+      ...airSources(),
       omt: { type: "vector", url: "wfomt://planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
@@ -124,24 +121,26 @@ export function buildStyle(theme) {
         paint: { "line-color": t.water, "line-width": z(11, 0.6, 16, 2), "line-dasharray": [2, 2] } },
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: ["all", notTunnel, ["!=", ["get", "intermittent"], 1]],
         paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
-      { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },
+      { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": ["match", ["get", "class"], "runway", t.runway, "taxiway", t.taxiway, "apron", t.apron, t.industrial] } },
       // The sea: a fine coastline, ferry routes, territorial waters.
       { id: "coastline", type: "line", source: "omt", "source-layer": "water", minzoom: 10, filter: cls("ocean", "sea", "bay", "lake"), paint: { "line-color": t.coast, "line-width": z(10, 0.5, 16, 1.2), "line-opacity": 0.8 } },
       { id: "ferry-route", type: "line", source: "omt", "source-layer": "transportation", minzoom: 7, filter: cls("ferry"), layout: { "line-cap": "round" },
         paint: { "line-color": t.ferry, "line-width": z(7, 0.8, 12, 1.6, 16, 2.4), "line-dasharray": [3, 2.5], "line-opacity": 0.85 } },
       { id: "sea-border", type: "line", source: "omt", "source-layer": "boundary", minzoom: 5, filter: ["all", ["==", ["get", "maritime"], 1], ["<=", ["get", "admin_level"], 4]],
         paint: { "line-color": t.seaBorder, "line-width": z(5, 0.6, 12, 1.2), "line-dasharray": [6, 3], "line-opacity": 0.7 } },
+      // Sea areas and lines: traffic separation schemes, restricted areas, anchorages, cables, pipelines…
+      ...sea.under,
       // Airports: aprons, taxiways and runways (with centre lines).
       { id: "aeroway-apron", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 13, filter: ["all", ["==", ["geometry-type"], "Polygon"], cls("apron")], paint: { "fill-color": t.apron } },
-      { id: "aeroway-taxiway", type: "line", source: "omt", "source-layer": "aeroway", minzoom: 12, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("taxiway")],
-        paint: { "line-color": t.runway, "line-width": z(12, 1, 15, 6, 18, 24) } },
-      { id: "aeroway-runway", type: "line", source: "omt", "source-layer": "aeroway", minzoom: 10, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("runway")],
-        paint: { "line-color": t.runway, "line-width": z(10, 2, 14, 14, 17, 60) } },
-      { id: "aeroway-runway-centre", type: "line", source: "omt", "source-layer": "aeroway", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("runway")],
-        paint: { "line-color": t.runwayLine, "line-width": z(14, 0.6, 17, 2), "line-dasharray": [6, 4] } },
+      ...air.ground,
       // Piers.
-      { id: "pier", type: "fill", source: "omt", "source-layer": "transportation", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "Polygon"], cls("pier")], paint: { "fill-color": t.pier } },
-      { id: "pier-line", type: "line", source: "omt", "source-layer": "transportation", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("pier")], paint: { "line-color": t.pier, "line-width": z(14, 1.5, 18, 8) } },
+      { id: "pier", type: "fill", source: "omt", "source-layer": "transportation", minzoom: 13, filter: ["all", ["==", ["geometry-type"], "Polygon"], cls("pier")], paint: { "fill-color": t.pier } },
+      { id: "pier-edge", type: "line", source: "omt", "source-layer": "transportation", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "Polygon"], cls("pier")], paint: { "line-color": t.pierLine, "line-width": z(14, 0.6, 18, 1.4) } },
+      { id: "pier-line-casing", type: "line", source: "omt", "source-layer": "transportation", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("pier")],
+        layout: { "line-cap": "butt", "line-join": "round" }, paint: { "line-color": t.pierLine, "line-width": z(14, 2.6, 18, 10.5) } },
+      { id: "pier-line", type: "line", source: "omt", "source-layer": "transportation", minzoom: 14, filter: ["all", ["==", ["geometry-type"], "LineString"], cls("pier")],
+        layout: { "line-cap": "butt", "line-join": "round" }, paint: { "line-color": t.pier, "line-width": z(14, 1.5, 18, 8) } },
       // Edges: each kind of area with its own colour and line style.
       { id: "edge-national-park-band", type: "line", source: "omt", "source-layer": "park", minzoom: 6, filter: cls("national_park"),
         paint: { "line-color": t.npLine, "line-opacity": 0.18, "line-width": z(6, 3, 12, 8), "line-offset": z(6, 1.5, 12, 4) } },
@@ -163,16 +162,17 @@ export function buildStyle(theme) {
       // Beaches (where people swim): a dotted blue edge.
       { id: "edge-beach", type: "line", source: "omt", "source-layer": "landcover", minzoom: 12, filter: ["==", ["get", "subclass"], "beach"],
         paint: { "line-color": t.beachLine, "line-width": z(12, 0.8, 16, 1.6), "line-dasharray": [0.5, 2] }, layout: { "line-cap": "round" } },
+      ...streets.tunnels,
       { id: "building", type: "fill", source: "omt", "source-layer": "building", minzoom: 14,
         paint: { "fill-color": t.building, "fill-outline-color": t.buildingLine, "fill-opacity": z(14, 0, 15, 1) } },
-      { id: "path", type: "line", source: "omt", "source-layer": "transportation", minzoom: 15, filter: ["all", cls("path", "track"), notTunnel],
+      { id: "path", type: "line", source: "omt", "source-layer": "transportation", minzoom: 15, filter: ["all", cls("path", "track"), notTunnel, ["!=", ["get", "subclass"], "pedestrian"]],
         paint: { "line-color": t.path, "line-width": z(15, 0.8, 18, 2), "line-dasharray": [2, 1.5] } },
-      ...road("road-minor", ["all", cls("minor", "service"), notTunnel], 12.5, t.roadEdge, t.road, [[12.5, 0.6], [14, 2.6], [16, 7], [19, 22]]),
-      ...road("road-mid", ["all", cls("secondary", "tertiary"), notTunnel], 10, t.majorEdge, t.major, [[10, 0.8], [12, 1.8], [14, 4.5], [16, 10], [19, 30]]),
-      ...road("road-major", ["all", cls("primary", "trunk"), notTunnel], 7, t.majorEdge, t.major, [[7, 0.6], [10, 1.6], [12, 2.6], [14, 6], [16, 12], [19, 34]]),
-      ...road("road-motorway", ["all", cls("motorway"), notTunnel], 5, t.motorwayEdge, t.motorway, [[5, 0.6], [8, 1.2], [12, 3], [14, 6.5], [16, 13], [19, 36]]),
+      ...streets.roads,
+      { id: "rail-tunnel", type: "line", source: "omt", "source-layer": "transportation", minzoom: 12, filter: ["all", cls("rail", "transit"), ["==", ["get", "brunnel"], "tunnel"], ["!", ["has", "service"]]],
+        paint: { "line-color": t.rail, "line-width": z(12, 0.6, 16, 1.4), "line-opacity": 0.6, "line-dasharray": [3, 2] } },
       { id: "rail-base", type: "line", source: "omt", "source-layer": "transportation", minzoom: 10, filter: ["all", cls("rail", "transit"), notTunnel],
         paint: { "line-color": t.rail, "line-width": z(10, 0.6, 16, 1.6) } },
+      ...streets.bridges,
       // Borders: countries as a dash-dot line on a soft halo, regions dotted, disputed borders fainter.
       { id: "border-halo", type: "line", source: "omt", "source-layer": "boundary", filter: ["all", ["==", ["get", "admin_level"], 2], ["!=", ["get", "maritime"], 1], ["!=", ["get", "disputed"], 1]],
         paint: { "line-color": t.borderHalo, "line-width": z(3, 3, 8, 6, 14, 10), "line-opacity": 0.55 } },
@@ -182,9 +182,7 @@ export function buildStyle(theme) {
         paint: { "line-color": t.border, "line-width": z(3, 0.8, 10, 1.4), "line-opacity": 0.6, "line-dasharray": [2, 3] } },
       { id: "border-region", type: "line", source: "omt", "source-layer": "boundary", minzoom: 5, filter: ["all", ["match", ["get", "admin_level"], [3, 4], true, false], ["!=", ["get", "maritime"], 1]],
         paint: { "line-color": t.region, "line-width": z(5, 0.6, 12, 1.2), "line-dasharray": [1, 2] }, layout: { "line-cap": "round" } },
-      { id: "road-names", type: "symbol", source: "omt", "source-layer": "transportation_name", minzoom: 14,
-        layout: { "symbol-placement": "line", "text-field": NAME, "text-font": ["Noto Sans Regular"], "text-size": z(14, 10, 18, 13), "text-max-angle": 30 },
-        paint: { "text-color": t.labelMuted, "text-halo-color": t.halo, "text-halo-width": 1.4 } },
+      ...streetLabels(t),
       ...net.lines,
       ...net.stations,
       // Names on the water: oceans and seas wide and spaced out, bays and straits smaller, all in italic navy.
@@ -225,17 +223,13 @@ export function buildStyle(theme) {
           "symbol-sort-key": ["get", "rank"] },
         paint: { "text-color": t.poi, "text-halo-color": t.halo, "text-halo-width": 1.3, "icon-opacity": 0.9 },
       })),
-      // Sea marks over everything on the water.
-      { id: "seamarks", type: "raster", source: "seamarks", minzoom: 9, paint: { "raster-fade-duration": 150 } },
       // Marinas and ferry terminals (base map), Blue Flags, lighthouses, harbours and slipways (OpenStreetMap, live).
       { id: "sea-poi", type: "symbol", source: "omt", "source-layer": "poi", minzoom: 12, filter: ["all", ["==", ["geometry-type"], "Point"], cls("harbor", "ferry_terminal")],
-        layout: { "icon-image": ["match", ["get", "class"], "ferry_terminal", "sea-ferry", "sea-marina"], "icon-size": z(12, 0.7, 16, 0.95),
+        layout: { "icon-image": ["match", ["get", "class"], "ferry_terminal", "sm-ferry", "sm-marina"], "icon-size": z(12, 0.7, 16, 0.95),
           "text-field": NAME, "text-font": ["Noto Sans Bold"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.1], "text-max-width": 8, "text-optional": true },
         paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
-      { id: "sea-places", type: "symbol", source: "sea-places", minzoom: 11,
-        layout: { "icon-image": ["concat", "sea-", ["get", "kind"]], "icon-size": z(11, 0.7, 16, 0.95), "symbol-sort-key": ["get", "rank"],
-          "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.1], "text-max-width": 8, "text-optional": true },
-        paint: { "text-color": t.seaLabel, "text-halo-color": t.halo, "text-halo-width": 1.3 } },
+      ...air.labels,
+      ...sea.over,
       ...net.labels,
     ],
   };

@@ -10,7 +10,10 @@
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
-import { seaIcon, SeaPlaces } from "./maritime.js";
+import { SeaMarks, preloadSeaIcons, SEA_LAYER_IDS } from "./maritime.js";
+import { Runways, preloadAirIcons, AIR_CLICK_LAYERS, runwaysIn, runwayBadge, lookupFlight, metresBetween } from "./aviation.js";
+import { preloadStreetIcons } from "./streets.js";
+import { attach as attachIcons } from "./icons.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
@@ -38,10 +41,20 @@ map.on("error", e => console.warn("Map:", e.error?.message || e));
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '<a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>' }), "bottom-right");
-map.on("styleimagemissing", e => { if (e.id.startsWith("stop-")) stopIcon(map, e.id, THEMES[themeNow()]); else if (e.id.startsWith("sea-")) seaIcon(map, e.id); });
+map.on("styleimagemissing", e => {
+  if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
+  if (/^(sm-|rwy-|air-|shield-|road-)/.test(e.id)) return; // drawn as SVG (icons.js), on their way
+  // A place kind the base map's sprite has no icon for: a small dot instead.
+  const c = document.createElement("canvas"); c.width = c.height = 24; const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.beginPath(); g.arc(12, 12, 8, 0, 7); g.fill(); g.fillStyle = "#80868B"; g.beginPath(); g.arc(12, 12, 5.5, 0, 7); g.fill();
+  map.addImage(e.id, { width: 24, height: 24, data: g.getImageData(0, 0, 24, 24).data }, { pixelRatio: 2 });
+});
+attachIcons(map);
+preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons();
 
 const net = new Network(map);
-const sea = new SeaPlaces(map);
+const sea = new SeaMarks(map);
+new Runways(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -139,6 +152,7 @@ const screen = () => stack[stack.length - 1];
 function screenParam(s) {
   if (s.t === "stop") return `stop:${s.ids[0]}~${s.name || ""}`;
   if (s.t === "place") return `place:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${s.name || ""}`;
+  if (s.t === "airport") return `airport:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${[s.name, s.iata || "", s.icao || "", s.ele ?? ""].join("|")}`;
   if (s.t === "line") return `line:${s.key}${s.tripId ? "~" + s.tripId : ""}`;
   return "";
 }
@@ -176,7 +190,7 @@ addEventListener("popstate", e => {
 
 const TITLES = {
   explore: () => "Explore", settings: () => "Settings", plan: () => "Directions", pick: () => "Lines here", menu: () => "Menu",
-  stop: s => s.name || "Stop", place: s => s.name || "Place", itin: s => `${duration(s.it.duration)} route`,
+  stop: s => s.name || "Stop", place: s => s.name || "Place", airport: s => s.iata || "Airport", itin: s => `${duration(s.it.duration)} route`,
   line: s => { const l = registry.get(s.key); return l ? `${classLabel(l.cls)} ${l.name}` : "Line"; },
 };
 /** The panel's header: back, the title, and a way home. Nothing on the start screen (the search is its header). */
@@ -543,6 +557,79 @@ VIEWS.place = {
   },
 };
 
+
+/* ============================== Airport ============================== */
+
+const BOARD_FLAP = str => `<span class="flaps">${[...String(str)].map(c => `<i>${c === " " ? "&nbsp;" : esc(c)}</i>`).join("")}</span>`;
+function flightHtml(f, s) {
+  if (!f) return `<div class="card muted">No route is known for that flight number.</div>`;
+  const here = c => c && (c.iata_code === s.iata || c.icao_code === s.icao);
+  const ap = (c, label) => `<div class="fend${here(c) ? " here" : ""}"><small>${label}</small><b>${esc(c?.iata_code || c?.icao_code || "—")}</b><span>${esc(c?.municipality || c?.name || "")}</span></div>`;
+  const dir = here(f.origin) ? "Departs from here" : here(f.destination) ? "Arrives here" : "Doesn't use this airport";
+  return `<div class="fcard"><div class="fhead">${BOARD_FLAP(f.callsign_iata || f.callsign)}<span>${esc(f.airline?.name || "")}</span></div>
+    <div class="froute">${ap(f.origin, "From")}<span class="farrow">${icon("plane", "s")}</span>${ap(f.destination, "To")}</div>
+    <p class="fnote">${dir} · callsign ${esc(f.callsign_icao || f.callsign)} · route data <a href="https://www.adsbdb.com" target="_blank" rel="noopener">adsbdb</a></p></div>`;
+}
+VIEWS.airport = {
+  sheet: "half",
+  enter(s) {
+    s.tab = s.tab || "overview";
+    mapFor({});
+    map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13.3), padding: padding(), duration: 700 });
+    map.once("idle", () => { s.runways = runwaysIn(map, [s.lon, s.lat], 7000).sort((a, b) => b.length - a.length); refresh(s); });
+    load(s, "near", async () => {
+      const d = await api.departures({ center: [s.lon, s.lat], radius: 1500, n: 60 });
+      return { deps: departures(d.stopTimes), stations: stationsFrom(d.stopTimes, [s.lon, s.lat]).slice(0, 4) };
+    });
+  },
+  html(s) {
+    const isSaved = saved().some(p => p.name === s.name && Math.abs(p.lon - s.lon) < 1e-4);
+    const codes = [s.iata, s.icao].filter(Boolean).join(" · ");
+    const tabs = [["overview", "Overview"], ["departures", "Departures"], ["arrivals", "Arrivals"]];
+    let body = "";
+    if (s.tab === "overview") {
+      const rw = s.runways;
+      body = `<div class="card list info">
+          ${codes ? `<div class="irow">${icon("plane", "s")}<span><b class="mono">${esc(codes)}</b><small>IATA · ICAO codes</small></span></div>` : ""}
+          ${s.ele != null ? `<div class="irow">${icon("terrain", "s")}<span><b>${Math.round(s.ele)} m</b><small>Elevation · ${Math.round(s.ele * 3.28084)} ft</small></span></div>` : ""}
+          <div class="irow">${icon("compass", "s")}<span class="mono">${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}</span></div>
+          <div class="irow">${icon("ticket", "s")}<span>Airlines and destinations</span>${soon()}</div></div>
+        ${section("Runways", rw ? `<span class="count">${rw.length}</span>` : "")}
+        ${!rw ? loading(2) : !rw.length ? `<div class="card muted">Zoom in on the airport to read its runways.</div>`
+          : `<div class="card list">${rw.map(r => `<div class="rwrow">${runwayBadge(r.ref)}<span><b>${(r.length / 1000).toFixed(2)} km</b><small>${r.ends.map(e => `${e.des} heading ${String(Math.round(e.rot)).padStart(3, "0")}°`).join(" · ")}</small></span></div>`).join("")}</div>`}
+        ${s.near?.stations?.length ? `${section("Getting there by public transport")}<div class="card list">${s.near.stations.map(st => stationRow(st, distance(st.d))).join("")}</div>`
+          : s.near && !s.near.stations.length ? "" : s.nearErr ? "" : loading(2)}`;
+    } else {
+      const dep = s.tab === "departures";
+      body = `<div class="board">
+          <div class="bhead">${icon("plane", "s")}${BOARD_FLAP(dep ? "DEPARTURES" : "ARRIVALS")}</div>
+          <div class="brow bcols"><span>Time</span><span>Flight</span><span>${dep ? "To" : "From"}</span><span>Gate</span></div>
+          ${[0, 1, 2].map(() => `<div class="brow ghost"><span>${BOARD_FLAP("--:--")}</span><span>${BOARD_FLAP("------")}</span><span>${BOARD_FLAP("--------")}</span><span>${BOARD_FLAP("--")}</span></div>`).join("")}
+          <p class="bnote">Live ${dep ? "departures" : "arrivals"} are coming ${soon()}</p></div>
+        ${section("Look up a flight")}
+        <form class="flookup" data-flight-form><input name="f" value="${esc(s.flightQ || "")}" placeholder="Flight number, e.g. VY1234" autocomplete="off" autocapitalize="characters" spellcheck="false"><button>${icon("search", "s")}</button></form>
+        ${s.flight$ ? loading(2) : s.flightErr ? failed(s.flightErr) : s.flight !== undefined ? flightHtml(s.flight, s) : ""}`;
+    }
+    return `<header class="title"><h1>${esc(s.name)}</h1><p>${esc(["Airport", codes].filter(Boolean).join(" · "))}</p></header>
+      <div class="circs">
+        <button class="circ primary" data-act="dir-place"><span>${icon("dir")}</span>Directions</button>
+        <button class="circ" data-act="save-place" aria-pressed="${isSaved}"><span>${icon(isSaved ? "heart" : "save")}</span>${isSaved ? "Saved" : "Save"}</button>
+        <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
+        <button class="circ" data-soon="Live flights on the map"><span>${icon("plane")}</span>Flights</button></div>
+      <div class="tabs" role="tablist">${tabs.map(([k, label]) => `<button role="tab" data-ptab="${k}" aria-selected="${s.tab === k}">${label}</button>`).join("")}</div>
+      ${body}`;
+  },
+};
+document.addEventListener("submit", e => {
+  const f = e.target.closest("[data-flight-form]");
+  if (!f) return;
+  e.preventDefault();
+  const s = screen(), q = f.elements.f.value.trim();
+  if (s.t !== "airport" || !q) return;
+  s.flightQ = q; s.flight = undefined;
+  load(s, "flight", () => lookupFlight(q));
+});
+
 /* ============================== Menu ============================== */
 
 VIEWS.menu = {
@@ -569,7 +656,7 @@ function applyLayers() {
   const vis = on => on ? "visible" : "none";
   for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
-  for (const id of ["seamarks", "sea-poi", "sea-places", "ferry-route", "ferry-names", "sea-border"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
+  for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
   sea.on = settings.sea; if (settings.sea) { sea.apply(); sea.update(); }
   $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
 }
@@ -956,10 +1043,21 @@ map.on("click", e => {
   if (veh?.properties.key && registry.get(veh.properties.key)) return go({ t: "line", key: veh.properties.key, tripId: veh.properties.trip });
   const st = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations"] });
   if (st.length) { const f = st[0].properties; return go({ t: "stop", ids: String(f.keys).split("\n"), name: f.name, lon: st[0].geometry.coordinates[0], lat: st[0].geometry.coordinates[1] }); }
+  const ap = map.queryRenderedFeatures(tapBox(e.point, 12), { layers: AIR_CLICK_LAYERS.filter(id => map.getLayer(id)) })[0];
+  if (ap) return openAirport(ap.properties, ap.geometry.coordinates);
   const keys = [...new Set(map.queryRenderedFeatures(tapBox(e.point, 11), { layers: ["net-lines"] }).flatMap(f => net.keysOf(f.properties.lines)))];
   if (keys.length === 1) return go({ t: "line", key: keys[0] });
   if (keys.length > 1) return go({ t: "pick", keys });
+  // Anywhere on an airfield (runways, aprons): that airport.
+  if (map.getZoom() >= 11 && map.queryRenderedFeatures(tapBox(e.point, 2), { layers: ["aeroway", "aeroway-runway", "aeroway-taxiway"].filter(id => map.getLayer(id)) }).length) {
+    const here = [e.lngLat.lng, e.lngLat.lat];
+    const best = map.querySourceFeatures("omt", { sourceLayer: "aerodrome_label" }).map(f => ({ f, d: metresBetween(here, f.geometry.coordinates) })).sort((a, b) => a.d - b.d)[0];
+    if (best && best.d < 6000) return openAirport(best.f.properties, best.f.geometry.coordinates);
+  }
 });
+function openAirport(p, [lon, lat]) {
+  go({ t: "airport", name: p["name:en"] || p.name_en || p.name || "Airport", iata: p.iata || null, icao: p.icao || null, ele: p.ele ?? null, lon, lat });
+}
 map.on("contextmenu", e => go({ t: "place", name: "Dropped pin", sub: `${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}`, lon: e.lngLat.lng, lat: e.lngLat.lat, needsName: true }));
 let hoverRaf = 0;
 map.on("mousemove", e => {
@@ -967,7 +1065,7 @@ map.on("mousemove", e => {
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
     if (!map.getLayer("stations")) return;
-    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles"] }).length ? "pointer" : "";
+    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
   });
 });
 
@@ -986,6 +1084,7 @@ statusModes();
 if (deepLink) {
   const v = decodeURIComponent(deepLink.slice(2)), kind = v.slice(0, v.indexOf(":")), [id, name] = v.slice(v.indexOf(":") + 1).split("~");
   if (kind === "stop") go({ t: "stop", ids: [id], name: name || null, lon: null, lat: null });
+  else if (kind === "airport") { const [lat, lon] = id.split(",").map(Number), [n, iata, icao, ele] = (name || "").split("|"); go({ t: "airport", name: n || "Airport", iata: iata || null, icao: icao || null, ele: ele === "" || ele == null ? null : +ele, lon, lat }); }
   else if (kind === "place") { const [lat, lon] = id.split(",").map(Number); go({ t: "place", name: name || "Place", sub: "", lon, lat }); }
   else if (kind === "line") {
     const tryOpen = () => { if (registry.get(id)) { go({ t: "line", key: id, tripId: name || null }); return true; } return false; };
