@@ -27,8 +27,8 @@ const ilat = y => (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) / RAD;
 
 /** Snap radius (mercator metres) per request zoom: wide far out, tight close in. */
 const SNAP = { 6: 900, 7: 600, 8: 320, 9: 160, 10: 70, 11: 22 };
-/** Far out only the big networks; buses appear from zoom 11, trams from 9. */
-const DRAW_FROM = { train: 0, metro: 8, tram: 9, ferry: 8, other: 11, bus: 11 };
+/** Far out only the big networks: metro from zoom 8, trams from 10, buses from 13. */
+const DRAW_FROM = { train: 0, metro: 8, tram: 10, ferry: 8, other: 12, bus: 13 };
 
 /* ------------------------------ Corridor graph ------------------------------ */
 

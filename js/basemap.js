@@ -5,20 +5,20 @@ import { networkSources, networkLayers } from "./network.js";
 export { stopIcon } from "./network.js";
 
 export const THEMES = {
-  // Black and white: a greyscale city, so the only colour on the map is the network.
+  // A full-colour general map: parks green, water blue, main roads warm. Transit sits on top of it.
   light: {
-    land: "#F2F2F2", water: "#D6D6D6", park: "#E6E6E6", wood: "#E1E1E1", residential: "#EDEDED", industrial: "#EAEAEA",
-    building: "#E2E2E2", buildingLine: "#D4D4D4", road: "#FFFFFF", roadEdge: "#D9D9D9", major: "#FFFFFF", majorEdge: "#C9C9C9",
-    motorway: "#FFFFFF", motorwayEdge: "#B5B5B5", path: "#C8C8C8", rail: "#B8B8B8", boundary: "#9E9E9E",
-    label: "#1A1A1A", labelMuted: "#7A7A7A", halo: "#F5F5F5", waterLabel: "#6E6E6E",
-    casing: "#F5F5F5", stopFill: "#FFFFFF", ring: "#000000", walk: "#000000", bike: "#000000",
+    land: "#F5F3EE", water: "#A4CDF0", park: "#CDE7C1", wood: "#BCDDB0", residential: "#EEEBE5", industrial: "#ECE6E1",
+    building: "#E4DED5", buildingLine: "#D7D0C5", road: "#FFFFFF", roadEdge: "#DCD5C9", major: "#FFF6D6", majorEdge: "#E8D49A",
+    motorway: "#FFD98E", motorwayEdge: "#E3A84E", path: "#C9C0B2", rail: "#B9B2A8", boundary: "#A89BC0",
+    label: "#33302B", labelMuted: "#77716A", halo: "#FFFFFF", waterLabel: "#3F78A8", poi: "#6B6156",
+    casing: "#FFFFFF", stopFill: "#FFFFFF", ring: "#1A1A1A", walk: "#1A1A1A", bike: "#1E9B55",
   },
   dark: {
-    land: "#0B0B0B", water: "#1C1C1C", park: "#121212", wood: "#141414", residential: "#0F0F0F", industrial: "#111111",
-    building: "#171717", buildingLine: "#202020", road: "#1E1E1E", roadEdge: "#0F0F0F", major: "#262626", majorEdge: "#0F0F0F",
-    motorway: "#2E2E2E", motorwayEdge: "#121212", path: "#262626", rail: "#3A3A3A", boundary: "#4A4A4A",
-    label: "#E8E8E8", labelMuted: "#8A8A8A", halo: "#0B0B0B", waterLabel: "#8A8A8A",
-    casing: "#0B0B0B", stopFill: "#F2F2F2", ring: "#000000", walk: "#FFFFFF", bike: "#FFFFFF",
+    land: "#1A1D22", water: "#0F2A40", park: "#1B3022", wood: "#1C3324", residential: "#1E2127", industrial: "#20232A",
+    building: "#262A31", buildingLine: "#2E333B", road: "#2C3139", roadEdge: "#1A1D22", major: "#3B3A33", majorEdge: "#1A1D22",
+    motorway: "#5A4A2C", motorwayEdge: "#2A2318", path: "#3A3F47", rail: "#4A5059", boundary: "#5E5373",
+    label: "#E2E4E8", labelMuted: "#9AA0A8", halo: "#1A1D22", waterLabel: "#7AA6CC", poi: "#B4AC9F",
+    casing: "#1A1D22", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#4CC27F",
   },
 };
 
@@ -40,6 +40,7 @@ export function buildStyle(theme) {
     version: 8,
     name: "Wayfinder " + theme,
     glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+    sprite: "https://tiles.openfreemap.org/sprites/ofm_f384/ofm",
     sources: {
       omt: { type: "vector", url: "https://tiles.openfreemap.org/planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
@@ -98,6 +99,15 @@ export function buildStyle(theme) {
       { id: "place-country", type: "symbol", source: "omt", "source-layer": "place", maxzoom: 7, filter: cls("country"),
         layout: { "text-field": NAME, "text-font": ["Noto Sans Bold"], "text-size": z(2, 11, 6, 15), "text-transform": "uppercase", "text-letter-spacing": 0.1, "text-max-width": 7 },
         paint: { "text-color": t.labelMuted, "text-halo-color": t.halo, "text-halo-width": 1.6 } },
+      // Places: shops, food, culture, health… (transit stops come from the network instead).
+      ...[["poi-major", ["<", ["get", "rank"], 8], 14.5], ["poi-minor", [">=", ["get", "rank"], 8], 16.5]].map(([id, rank, minzoom]) => ({
+        id, type: "symbol", source: "omt", "source-layer": "poi", minzoom,
+        filter: ["all", ["==", ["geometry-type"], "Point"], rank, ["!", ["match", ["get", "class"], ["bus", "rail", "railway", "tram", "ferry_terminal", "aerialway"], true, false]]],
+        layout: { "icon-image": ["match", ["get", "subclass"], ["florist", "furniture"], ["get", "subclass"], ["get", "class"]], "icon-size": 0.9,
+          "text-field": NAME, "text-font": ["Noto Sans Regular"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 0.7], "text-max-width": 8,
+          "symbol-sort-key": ["get", "rank"] },
+        paint: { "text-color": t.poi, "text-halo-color": t.halo, "text-halo-width": 1.3, "icon-opacity": 0.9 },
+      })),
       ...net.labels,
     ],
   };

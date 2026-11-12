@@ -45,4 +45,4 @@ map, the loaded network and the current screens.
 
 - Timetables, live times, routing and line shapes: [Transitous](https://transitous.org) (community-run, free; please use it fairly).
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org) © OpenMapTiles.
-- Fonts: Inter Tight and JetBrains Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
+- Fonts: Inter and JetBrains Mono (Google Fonts). Map icons: OpenFreeMap sprite. Icons: [Phosphor](https://phosphoricons.com) (MIT).

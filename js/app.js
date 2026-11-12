@@ -1,11 +1,12 @@
 // Wayfinder: the interface.
 //
-// Layout: a bar across the top (name, search, Plan), the map, an inspector beside it (a sheet on
-// phones) with breadcrumbs for the way back, and a status line at the bottom (what's live, which
-// kinds of transport are shown). Black and white: the only colour is the network's own.
+// A general map with public transport as one of its layers. Layout: a floating search pill with
+// categories beside it, a floating panel (a sheet on phones) for whatever you're looking at, map
+// controls with a layers sheet, and a small live pill. The interface is black and white; the map
+// and the network keep their colours. Features that aren't built yet are already in place, marked "Soon".
 //
-// Screens, stacked in the inspector and in the browser history:
-//   here → stop / line / place → plan → route,  plus "lines here" and settings.
+// Screens, stacked in the panel and in the browser history:
+//   explore → stop / line / place → plan → route,  plus "lines here", menu and settings.
 
 import { api, shape } from "./api.js";
 import { buildStyle, stopIcon, THEMES } from "./basemap.js";
@@ -16,7 +17,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -50,24 +51,21 @@ map.on("moveend", () => {
   onMapMoved();
   statusModes();
 });
-map.on("zoom", () => { $("#szoom").textContent = "z" + map.getZoom().toFixed(1); });
-net.on(() => { $("#sbusy").hidden = net.loading === 0; });
+net.on(() => { $("#busy").hidden = net.loading === 0; });
 
 function applyTheme() {
   const t = themeNow();
   document.documentElement.dataset.theme = t;
   $('meta[name="theme-color"]').content = t === "dark" ? "#000000" : "#FFFFFF";
-  $('[data-act="theme"] use').setAttribute("href", t === "dark" ? "#i-sun" : "#i-moon");
   map.setStyle(buildStyle(t));
-  map.once("style.load", () => { net.render(true); net.applyFocus(); for (const k in overlay) map.getSource(k)?.setData(overlay[k]); });
+  map.once("style.load", () => { net.render(true); net.applyFocus(); applyLayers(); for (const k in overlay) map.getSource(k)?.setData(overlay[k]); });
 }
 darkQuery.addEventListener("change", () => settings.theme === "system" && applyTheme());
-$('[data-act="theme"] use').setAttribute("href", themeNow() === "dark" ? "#i-sun" : "#i-moon");
 
 const meEl = document.createElement("div"); meEl.className = "me-dot";
 const meMarker = new maplibregl.Marker({ element: meEl });
 const pinEl = document.createElement("div"); pinEl.className = "pin-mark";
-pinEl.innerHTML = `<svg viewBox="0 0 24 34"><path d="M12 33 L12 20" stroke="currentColor" stroke-width="2.5"/><rect x="2" y="2" width="20" height="20" fill="currentColor" stroke="var(--bg)" stroke-width="2"/><rect x="8" y="8" width="8" height="8" fill="var(--bg)"/></svg>`;
+pinEl.innerHTML = `<svg viewBox="0 0 30 40"><path d="M15 39C15 39 2 23.5 2 14.5a13 13 0 0 1 26 0C28 23.5 15 39 15 39Z" fill="#111" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14.5" r="5" fill="#fff"/></svg>`;
 const pinMarker = new maplibregl.Marker({ element: pinEl, anchor: "bottom" });
 
 $("#zin").addEventListener("click", () => map.zoomIn());
@@ -87,7 +85,7 @@ function locate(fly) {
     meMarker.setLngLat(me).addTo(map);
     $("#locate").classList.add("on");
     if (first && fly) map.flyTo({ center: me, zoom: Math.max(map.getZoom(), 15), padding: padding() });
-    if (first && screen().t === "here") loadHere(screen(), true);
+    if (first && screen().t === "explore") loadHere(screen(), true);
   }, err => { watching = false; if (fly) toast(err.code === 1 ? "Location permission was refused." : "Couldn't find your location."); },
   { enableHighAccuracy: true, maximumAge: 15000 });
 }
@@ -99,10 +97,10 @@ const here = () => me || map.getCenter().toArray();
 
 const insp = $("#insp"), body = $("#body");
 let sheet = "half";
-const barH = () => $(".bar").offsetHeight || 56;
+const topH = () => wide() ? 0 : ($("#omniwrap").offsetHeight || 52) + ($("#cats").offsetHeight || 40) + 20;
 function sheetHeight(state = sheet) {
   const H = innerHeight;
-  return state === "peek" ? 150 : state === "full" ? H - barH() - 8 : Math.round(H * 0.5);
+  return state === "peek" ? 150 : state === "full" ? H - 70 : Math.round(H * 0.5);
 }
 function setSheet(state, animate = true) {
   sheet = state;
@@ -111,8 +109,8 @@ function setSheet(state, animate = true) {
   document.body.dataset.sheet = wide() ? "" : state;
 }
 function padding() {
-  if (wide()) return { top: 60, bottom: 70, left: 60, right: 80 };
-  return { top: 40, bottom: sheetHeight() + 24, left: 30, right: 60 };
+  if (wide()) return { top: 90, bottom: 60, left: ($("#insp").offsetWidth || 400) + 70, right: 90 };
+  return { top: topH() + 10, bottom: sheetHeight() + 24, left: 30, right: 70 };
 }
 wideQuery.addEventListener("change", () => { map.resize(); setSheet(sheet, false); render(); });
 addEventListener("resize", debounce(() => { setSheet(sheet, false); afterRender(); }, 100));
@@ -132,7 +130,7 @@ addEventListener("resize", debounce(() => { setSheet(sheet, false); afterRender(
 
 /* ============================== Navigation: a stack, in the browser history ============================== */
 
-let stack = [{ t: "here" }];
+let stack = [{ t: "explore" }];
 const screen = () => stack[stack.length - 1];
 function screenParam(s) {
   if (s.t === "stop") return `stop:${s.ids[0]}~${s.name || ""}`;
@@ -173,21 +171,23 @@ addEventListener("popstate", e => {
 });
 
 const TITLES = {
-  here: () => "Here", settings: () => "Settings", plan: () => "Plan", pick: () => "Lines here",
+  explore: () => "Explore", settings: () => "Settings", plan: () => "Directions", pick: () => "Lines here", menu: () => "Menu",
   stop: s => s.name || "Stop", place: s => s.name || "Place", itin: s => `${duration(s.it.duration)} route`,
   line: s => { const l = registry.get(s.key); return l ? `${classLabel(l.cls)} ${l.name}` : "Line"; },
 };
-function crumbs() {
-  return stack.map((s, i) => i === stack.length - 1
-    ? `<span class="crumb now" aria-current="page">${esc(TITLES[s.t](s))}</span>`
-    : `<button class="crumb" data-crumb="${i}">${esc(TITLES[s.t](s))}</button><span class="sep" aria-hidden="true">/</span>`).join("");
+/** The panel's header: back, the title, and a way home. Nothing on the start screen (the search is its header). */
+function headHtml() {
+  const s = screen();
+  if (stack.length === 1) return "";
+  return `<button class="hbtn" data-act="back" aria-label="Back">${icon("back", "s")}</button><span class="htitle">${esc(TITLES[s.t](s))}</span>
+    <button class="hbtn" data-act="home" aria-label="Close">${icon("close", "s")}</button>`;
 }
 
 let shown = null;
 function render(fresh = false) {
   const s = screen(), V = VIEWS[s.t];
   document.body.dataset.screen = s.t;
-  $("#crumbs").innerHTML = crumbs();
+  $("#phead").innerHTML = headHtml();
   const keep = shown === s && !fresh ? body.scrollTop : 0;
   body.innerHTML = V.html(s);
   body.scrollTop = keep;
@@ -199,7 +199,7 @@ function afterRender() { const s = screen(); VIEWS[s.t].after?.(s); }
 function refresh(s) {
   if (screen() !== s) return;
   const sc = body.scrollTop;
-  $("#crumbs").innerHTML = crumbs();
+  $("#phead").innerHTML = headHtml();
   body.innerHTML = VIEWS[s.t].html(s);
   body.scrollTop = sc;
   afterRender();
@@ -228,7 +228,7 @@ function frame(coords, maxZoom = 16) {
 const loading = (n = 4) => `<div class="skels">${Array.from({ length: n }, () => `<i></i>`).join("")}</div>`;
 const failed = (msg, retry) => `<div class="note">Couldn't load this (${esc(msg)}).${retry ? ` <button class="tlink" data-act="${retry}">Try again</button>` : ""}</div>`;
 const KIND_ICON = { train: "train", metro: "metro", tram: "tram", bus: "bus", ferry: "ferry", other: "cable" };
-const head = (kicker, title, meta) => `<header class="hd">${kicker ? `<p class="kicker">${kicker}</p>` : ""}<h1>${esc(title)}</h1>${meta ? `<p class="meta">${meta}</p>` : ""}</header>`;
+const head = (kicker, title, meta) => `<header class="title"><h1>${esc(title)}</h1><p>${[kicker, meta].filter(Boolean).join(" · ")}</p></header>`;
 const section = (title, extra = "") => `<h2 class="sh"><span>${title}</span>${extra}</h2>`;
 
 /** One departure as a row: minutes (or the clock time), line, destination, where. */
@@ -275,25 +275,22 @@ function stationRow(st, label) {
   return `<button class="srow" data-stop="${esc([...st.keys].join("\n"))}" data-name="${esc(st.name)}" data-lon="${st.lon}" data-lat="${st.lat}">
     <span class="sname"><b>${esc(st.name)}</b><small>${label}</small></span><span class="badges">${ls.slice(0, 8).map(l => badge(l, "sm")).join("")}${ls.length > 8 ? `<small>+${ls.length - 8}</small>` : ""}</span></button>`;
 }
-function modeToggles() {
-  const modes = CLASSES.filter(c => net.seen.has(c.id) || !net.enabled.has(c.id));
-  return modes.map(c => `<button class="mt" data-mode="${c.id}" aria-pressed="${net.enabled.has(c.id)}" title="${c.label}">${icon(c.icon, "xs")}<span>${c.label}</span></button>`).join("");
-}
-function statusModes() { $("#smodes").innerHTML = modeToggles(); $("#szoom").textContent = "z" + map.getZoom().toFixed(1); }
+function statusModes() { if (!$("#layers").hidden) renderLayers(); }
+const soon = label => `<span class="soon">${label || "Soon"}</span>`;
 const saved = () => store.get("saved", []);
 
-/* ============================== Here ============================== */
+/* ============================== Explore (the start) ============================== */
 
 let placeName = null, placeAt = null;
 function loadHere(s, force) {
   const c = here();
   if (!force && s.at && metres(c, s.at) < 250) return;
   s.at = c; s.data = null; s["data$"] = false;
+  if (!settings.transit) return;
   load(s, "data", async () => {
     const d = await api.departures({ center: c, radius: 600, n: 120 });
-    return { deps: departures(d.stopTimes), stations: stationsFrom(d.stopTimes, c).slice(0, 6) };
+    return { deps: departures(d.stopTimes), stations: stationsFrom(d.stopTimes, c).slice(0, 5) };
   });
-  // The name of where you are (or where the map is).
   if (!placeAt || metres(c, placeAt) > 300) {
     placeAt = c;
     api.reverse(c).then(r => { const a = r[0]; placeName = a ? (a.areas || []).find(x => x.default)?.name || a.name : null; if (screen() === s) refresh(s); }).catch(() => {});
@@ -301,34 +298,42 @@ function loadHere(s, force) {
 }
 const onMapMoved = debounce(() => {
   const s = screen();
-  if (s.t !== "here") return;
+  if (s.t !== "explore") return;
   if (!me) loadHere(s);
   net.linesInView().then(ls => { s.inview = ls.sort(compareLines); refresh(s); });
 }, 450);
 
+/** What you can look for. Searching by category isn't built yet: they say so. */
+const CATS = [["food", "Restaurants"], ["cafe", "Cafés"], ["grocery", "Groceries"], ["hotel", "Hotels"], ["shop", "Shopping"], ["park", "Parks"], ["museum", "Museums"],
+  ["bar", "Bars"], ["fuel", "Fuel"], ["charge", "EV charging"], ["parking", "Parking"], ["pharmacy", "Pharmacies"], ["hospital", "Hospitals"], ["atm", "ATMs"], ["toilet", "Toilets"]];
+$("#cats").innerHTML = `<button class="chip on" data-act="transit-chip">${icon("tram", "s")}Transit</button>` + CATS.map(([ic, label]) => `<button class="chip" data-soon="Searching for ${label.toLowerCase()}">${icon(ic, "s")}${label}</button>`).join("");
+
 const VIEWS = {};
-VIEWS.here = {
+VIEWS.explore = {
   sheet: "half",
   enter(s) { mapFor(); loadHere(s); net.linesInView().then(ls => { s.inview = ls.sort(compareLines); refresh(s); }); },
   html(s) {
-    const where = me ? "Near you" : "Near the map centre";
     const d = s.data;
-    const shownN = s.more ? 40 : 12;
-    const board = s.dataErr ? failed(s.dataErr, "reload-here") : !d ? loading(6)
-      : !d.deps.length ? `<div class="note">No departures within 600 m of ${me ? "you" : "the map centre"} in the next hours. Move the map to a town or city.</div>`
-      : `<div class="deps">${d.deps.slice(0, shownN).map(x => depRow(x, `${x.stop.name}${me ? ` · ${walkMin(metres(me, [x.stop.lon, x.stop.lat]))} min walk` : ""}`)).join("")}</div>
-         ${d.deps.length > shownN ? `<button class="more-btn" data-act="more">More departures</button>` : ""}`;
-    const places = saved();
-    const lines = s.inview || [];
-    return `<header class="hd here"><p class="kicker">${where}${placeName ? ` · ${esc(placeName)}` : ""}</p><h1 id="clock" class="clock">${clock(new Date().toISOString())}</h1></header>
-      <div class="mt-row phone">${modeToggles()}</div>
-      ${places.length ? `${section("Saved")}<div class="list">${places.map((p, i) => `<button class="lrow2" data-saved="${i}"><b>${esc(p.name)}</b><small>Directions →</small></button>`).join("")}</div>` : ""}
-      ${section("Leaving soon", `<button class="tlink" data-act="reload-here">Refresh</button>`)}${board}
-      ${d?.stations?.length ? `${section("Stops nearby")}<div class="list">${d.stations.map(st => stationRow(st, `${distance(st.d)}${me ? ` · ${walkMin(st.d)} min walk` : ""}`)).join("")}</div>` : ""}
-      ${lines.length ? `${section(`Lines in view · ${lines.length}`)}<div class="linegrid">${lines.slice(0, 120).map(l => `<button data-line="${esc(l.key)}" title="${esc(l.longName || classLabel(l.cls) + " " + l.name)}">${badge(l)}</button>`).join("")}</div>` : ""}`;
+    const places = saved(), lines = s.inview || [];
+    const quick = `<div class="quick">
+      <button data-act="plan"><span>${icon("dir")}</span>Directions</button>
+      <button data-act="menu-saved"><span>${icon("save")}</span>Saved</button>
+      <button data-soon="Exploring what's around"><span>${icon("compass")}</span>Nearby</button>
+      <button data-soon="Offline maps"><span>${icon("offline")}</span>Offline</button></div>`;
+    const transit = !settings.transit ? `<div class="card muted">Public transport is hidden. <button class="tlink" data-act="transit-chip">Show it</button></div>`
+      : `${section("Public transport nearby", `<button class="tlink" data-act="reload-here">Refresh</button>`)}
+      <p class="sub">${me ? "Near you" : "Near the map centre"}${placeName ? ` · ${esc(placeName)}` : ""}</p>
+      ${s.dataErr ? failed(s.dataErr, "reload-here") : !d ? loading(4)
+        : !d.deps.length ? `<div class="card muted">Nothing leaves within 600 m in the next hours. Move the map to a town or city.</div>`
+        : `<div class="card list">${d.deps.slice(0, s.more ? 30 : 5).map(x => depRow(x, `${x.stop.name}${me ? ` · ${walkMin(metres(me, [x.stop.lon, x.stop.lat]))} min walk` : ""}`)).join("")}
+           ${d.deps.length > 5 && !s.more ? `<button class="cardmore" data-act="more">More departures</button>` : ""}</div>`}
+      ${d?.stations?.length ? `${section("Stops")}<div class="card list">${d.stations.map(st => stationRow(st, `${distance(st.d)}${me ? ` · ${walkMin(st.d)} min walk` : ""}`)).join("")}</div>` : ""}
+      ${lines.length ? `${section(`Lines in view`, `<span class="count">${lines.length}</span>`)}<div class="linegrid">${lines.slice(0, 60).map(l => `<button data-line="${esc(l.key)}" title="${esc(l.longName || classLabel(l.cls) + " " + l.name)}">${badge(l)}</button>`).join("")}</div>` : ""}`;
+    const explore = `${section("Explore nearby", soon())}<div class="tiles">${CATS.slice(0, 8).map(([ic, label]) => `<button data-soon="Searching for ${label.toLowerCase()}"><span>${icon(ic)}</span>${label}</button>`).join("")}</div>`;
+    const savedHtml = places.length ? `${section("Saved")}<div class="card list">${places.map((p, i) => `<button class="lrow2" data-saved="${i}"><span class="ico">${icon("save", "s")}</span><span><b>${esc(p.name)}</b><small>${esc(p.sub || "")}</small></span><small>Directions</small></button>`).join("")}</div>` : "";
+    return quick + transit + explore + savedHtml;
   },
 };
-setInterval(() => { const el = document.getElementById("clock"); if (el) el.textContent = clock(new Date().toISOString()); }, 5000);
 
 /* ============================== Stop (a station: one or more stops with one name) ============================== */
 
@@ -351,7 +356,7 @@ VIEWS.stop = {
     const isSaved = saved().some(p => p.name === s.name && s.lon != null && Math.abs(p.lon - s.lon) < 1e-4);
     return head(kinds.length ? kinds.join(" · ") + " stop" : "Stop", s.name || "Stop",
         [d != null ? `${distance(d)} · ${walkMin(d)} min walk` : null, lines.length ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : null, s.ids.length > 1 ? `${s.ids.length} platforms and stops` : null].filter(Boolean).join(" · "))
-      + `<div class="acts"><button class="act primary" data-act="dir-stop">${icon("dir", "s")}Directions</button><button class="act" data-act="save-stop" aria-pressed="${isSaved}">${icon("save", "s")}${isSaved ? "Saved" : "Save"}</button><button class="act" data-act="share">${icon("share", "s")}Share</button></div>`
+      + `<div class="circs"><button class="circ primary" data-act="dir-stop"><span>${icon("dir")}</span>Directions</button><button class="circ" data-act="save-stop" aria-pressed="${isSaved}"><span>${icon(isSaved ? "heart" : "save")}</span>${isSaved ? "Saved" : "Save"}</button><button class="circ" data-act="share"><span>${icon("share")}</span>Share</button><button class="circ" data-soon="Alerts for this stop"><span>${icon("warn")}</span>Alerts</button></div>`
       + (lines.length > 1 ? `<div class="filter">${lines.map(l => `<button data-only="${esc(l.key)}" aria-pressed="${s.only === l.key}">${badge(l, "sm")}</button>`).join("")}${s.only ? `<button class="tlink" data-only="${esc(s.only)}">Show all</button>` : ""}</div>` : "")
       + section("Departures", `<span class="sh-note">live · +late · minutes</span>`)
       + (s.depsErr ? failed(s.depsErr, "reload-stop") : !s.deps ? loading(7) : list.length ? `<div class="deps">${list.slice(0, 60).map(x => depRow(x)).join("")}</div>` : `<div class="note">No departures in the next hours.</div>`)
@@ -386,8 +391,7 @@ VIEWS.line = {
     const d = s.data;
     const ends = d?.lay ? [...new Set(d.lay.ends.map(e => d.lay.rows[e.row].name))] : [];
     const title = l.longName || (ends.length ? ends.slice(0, 2).join(" – ") : `${classLabel(l.cls)} ${l.name}`);
-    const top = `<header class="hd line">${badge(l, "big")}<div><p class="kicker">${esc([classLabel(l.cls), l.agency].filter(Boolean).join(" · "))}</p><h1>${esc(title)}</h1>
-      <p class="meta">${d?.lay ? `${d.lay.rows.length} stations · ${d.lay.ends.length} ends` : ""}</p></div></header>`;
+    const top = `<header class="title line">${badge(l, "big")}<div><h1>${esc(title)}</h1><p>${esc([classLabel(l.cls), l.agency, d?.lay && `${d.lay.rows.length} stations`].filter(Boolean).join(" · "))}</p></div></header>`;
     if (s.dataErr) return top + failed(s.dataErr, "reload-line");
     if (!d) return top + loading(10);
     if (!d.lay) return top + `<div class="note">Nothing of this line is running right now.</div>`;
@@ -492,6 +496,7 @@ VIEWS.pick = {
 VIEWS.place = {
   sheet: "half",
   enter(s) {
+    s.tab = s.tab || "overview";
     mapFor({ pin: [s.lon, s.lat] });
     map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 15.5), padding: padding(), duration: 650 });
     load(s, "near", async () => {
@@ -504,13 +509,92 @@ VIEWS.place = {
     const isSaved = saved().some(p => p.name === s.name && Math.abs(p.lon - s.lon) < 1e-5);
     const d = me ? metres(me, [s.lon, s.lat]) : null;
     const n = s.near;
-    return head(s.sub || "Place", s.name, d != null ? `${distance(d)} from you` : "")
-      + `<div class="acts"><button class="act primary" data-act="dir-place">${icon("dir", "s")}Directions</button><button class="act" data-act="save-place" aria-pressed="${isSaved}">${icon("save", "s")}${isSaved ? "Saved" : "Save"}</button><button class="act" data-act="share">${icon("share", "s")}Share</button></div>`
-      + section("Stops within 500 m")
-      + (s.nearErr ? failed(s.nearErr) : !n ? loading(3) : n.stations.length ? `<div class="list">${n.stations.map(st => stationRow(st, `${distance(st.d)} · ${walkMin(st.d)} min walk`)).join("")}</div>` : `<div class="note">No public transport within 500 m.</div>`)
-      + (n?.deps.length ? section("Leaving soon") + `<div class="deps">${n.deps.slice(0, 8).map(x => depRow(x, x.stop.name)).join("")}</div>` : "");
+    const tabs = [["overview", "Overview"], ["transit", "Transit"], ["photos", "Photos"], ["reviews", "Reviews"]];
+    let body = "";
+    if (s.tab === "overview") {
+      body = `<div class="card list info">
+          <div class="irow">${icon("pin", "s")}<span><b>${esc(s.name)}</b><small>${esc(s.sub || "")}</small></span></div>
+          <div class="irow">${icon("compass", "s")}<span class="mono">${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}</span></div>
+          <div class="irow">${icon("clock", "s")}<span>Opening hours</span>${soon()}</div>
+          <div class="irow">${icon("globe", "s")}<span>Website</span>${soon()}</div>
+          <div class="irow">${icon("phone", "s")}<span>Phone</span>${soon()}</div>
+          <div class="irow">${icon("wheel", "s")}<span>Accessibility</span>${soon()}</div></div>`
+        + (n?.stations?.length ? `${section("Getting there by public transport")}<div class="card list">${n.stations.slice(0, 2).map(st => stationRow(st, `${distance(st.d)} · ${walkMin(st.d)} min walk`)).join("")}</div>` : "");
+    } else if (s.tab === "transit") {
+      body = s.nearErr ? failed(s.nearErr) : !n ? loading(3) : !n.stations.length ? `<div class="card muted">No public transport within 500 m.</div>`
+        : `${section("Stops within 500 m")}<div class="card list">${n.stations.map(st => stationRow(st, `${distance(st.d)} · ${walkMin(st.d)} min walk`)).join("")}</div>`
+          + (n.deps.length ? `${section("Leaving soon")}<div class="card list">${n.deps.slice(0, 8).map(x => depRow(x, x.stop.name)).join("")}</div>` : "");
+    } else {
+      body = `<div class="card muted soonbox">${icon(s.tab === "photos" ? "camera" : "star")}<b>${s.tab === "photos" ? "Photos" : "Reviews"} are coming</b><span>Open data sources for them are being looked at.</span></div>`;
+    }
+    return `<header class="title"><h1>${esc(s.name)}</h1><p>${esc([s.sub, d != null ? `${distance(d)} away` : null].filter(Boolean).join(" · "))}</p></header>
+      <div class="circs">
+        <button class="circ primary" data-act="dir-place"><span>${icon("dir")}</span>Directions</button>
+        <button class="circ" data-act="save-place" aria-pressed="${isSaved}"><span>${icon(isSaved ? "heart" : "save")}</span>${isSaved ? "Saved" : "Save"}</button>
+        <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
+        <button class="circ" data-soon="What's nearby"><span>${icon("compass")}</span>Nearby</button>
+        <button class="circ" data-soon="Calling places"><span>${icon("phone")}</span>Call</button></div>
+      <div class="tabs" role="tablist">${tabs.map(([k, label]) => `<button role="tab" data-ptab="${k}" aria-selected="${s.tab === k}">${label}</button>`).join("")}</div>
+      ${body}`;
   },
 };
+
+/* ============================== Menu ============================== */
+
+VIEWS.menu = {
+  sheet: "full",
+  enter() { mapFor(); },
+  html() {
+    const item = (ic, label, attr, extra = "") => `<button class="mrow" ${attr}><span class="ico">${icon(ic, "s")}</span><span>${label}</span>${extra}</button>`;
+    const places = saved(), rec = store.get("recent", []);
+    return `<header class="title"><h1>Wayfinder</h1><p>A map of everything, open data first</p></header>
+      <div class="card list">${item("save", "Saved places", 'data-act="menu-saved"', `<small>${places.length}</small>`)}${item("recent", "Recent", 'data-act="search-go"', `<small>${rec.length}</small>`)}
+        ${item("timeline", "Your timeline", 'data-soon="Your timeline"', soon())}${item("offline", "Offline maps", 'data-soon="Offline maps"', soon())}
+        ${item("person", "Share your location", 'data-soon="Sharing your location"', soon())}${item("map", "Your maps and lists", 'data-soon="Lists"', soon())}</div>
+      <div class="card list">${item("layers", "Map layers", 'data-act="layers"')}${item("gear", "Settings", 'data-act="settings"')}</div>
+      ${places.length ? `${section("Saved places")}<div class="card list" id="savedlist">${places.map((p, i) => `<button class="lrow2" data-saved="${i}"><span class="ico">${icon("save", "s")}</span><span><b>${esc(p.name)}</b><small>${esc(p.sub || "")}</small></span><small>Directions</small></button>`).join("")}</div>` : ""}
+      <p class="about">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, tiles by <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>; public transport from <a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>; drawn with <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a>.</p>`;
+  },
+};
+
+/* ============================== Layers ============================== */
+
+const NET_LAYERS = ["net-casing", "net-lines", "net-rail-dash", "stations", "stations-far", "station-links", "station-links-casing", "station-labels", "vehicles", "vehicle-labels"];
+/** Show or hide what the layers sheet controls. */
+function applyLayers() {
+  const vis = on => on ? "visible" : "none";
+  for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
+  for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
+  $('[data-act="transit-chip"]')?.classList.toggle("on", settings.transit);
+}
+map.on("style.load", applyLayers);
+function renderLayers() {
+  const sw = (on, attr, title, sub, ic) => `<div class="lrow3"><span class="ico">${icon(ic, "s")}</span><span><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</span><button class="switch" role="switch" aria-checked="${on}" ${attr} aria-label="${title}"></button></div>`;
+  const soonRow = (ic, title, sub) => `<div class="lrow3 off" data-soon="${title}"><span class="ico">${icon(ic, "s")}</span><span><b>${title}</b><small>${sub}</small></span>${soon()}</div>`;
+  const types = [["map", "Default", true, null], ["satellite", "Satellite", false, "Satellite imagery"], ["terrain", "Terrain", false, "Terrain"]];
+  $("#layers").innerHTML = `<div class="lhead"><b>Map</b><button class="hbtn" data-act="layers" aria-label="Close">${icon("close", "s")}</button></div>
+    <div class="types">${types.map(([ic, label, ok, s2]) => `<button class="type${ok ? " on" : ""}" ${ok ? "" : `data-soon="${s2}"`}><span>${icon(ic)}</span>${label}${ok ? "" : soon()}</button>`).join("")}</div>
+    <div class="types two">${["light", "dark"].map(t => `<button class="type${themeNow() === t ? " on" : ""}" data-theme-set="${t}"><span>${icon(t === "light" ? "sun" : "moon")}</span>${t === "light" ? "Light" : "Dark"}</button>`).join("")}</div>
+    <p class="lsec">On the map</p>
+    ${sw(settings.transit, 'data-layer="transit"', "Public transport", "Lines running now, stops and stations", "tram")}
+    ${settings.transit ? `<div class="kinds">${CLASSES.filter(c => net.seen.has(c.id) || !net.enabled.has(c.id)).map(c => `<button data-mode="${c.id}" aria-pressed="${net.enabled.has(c.id)}">${icon(c.icon, "xs")}${c.label}</button>`).join("")}</div>` : ""}
+    ${sw(settings.vehicles, 'data-set="vehicles"', "Moving vehicles", "Every bus, tram and train, live", "bus")}
+    ${sw(settings.places, 'data-layer="places"', "Places", "Shops, food, culture, services", "pin")}
+    ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
+    ${soonRow("traffic", "Traffic", "Road speeds and closures")}
+    ${soonRow("cloud", "Weather", "Rain radar and forecasts")}
+    ${soonRow("wind", "Air quality", "Sensor readings")}
+    ${soonRow("quake", "Earthquakes", "Live from seismic networks")}
+    ${soonRow("book", "Wikipedia", "Articles about places")}
+    ${soonRow("webcam", "Webcams", "Live views")}`;
+}
+function toggleLayers(force) {
+  const el = $("#layers"), open = force ?? el.hidden;
+  if (open) renderLayers();
+  el.hidden = !open;
+  $("#layersbtn").classList.toggle("on", open);
+}
+document.addEventListener("pointerdown", e => { if (!$("#layers").hidden && !e.target.closest("#layers, #layersbtn")) toggleLayers(false); });
 
 /* ============================== Plan ============================== */
 
@@ -560,7 +644,7 @@ VIEWS.plan = {
         <button class="fld" data-act="pick-to"><span class="lbl">To</span><span class="val${T.to ? "" : " ph"}">${esc(endName(T.to) || "Choose a destination")}</span></button>
         <button class="swap" data-act="swap" aria-label="Swap start and destination">${icon("swap", "s")}</button>
       </div>
-      <div class="modes3" role="group" aria-label="How to travel">${[["transit", "Transit", "tram"], ["walk", "Walk", "walk"], ["bike", "Cycle", "bike"]].map(([m, label, ic]) =>
+      <div class="modes4" role="group" aria-label="How to travel"><button data-soon="Driving directions" class="off">${icon("car", "s")}<span>Drive</span><small>soon</small></button>${[["transit", "Transit", "tram"], ["walk", "Walk", "walk"], ["bike", "Cycle", "bike"]].map(([m, label, ic]) =>
         `<button data-trip-mode="${m}" aria-pressed="${T.mode === m}">${icon(ic, "s")}<span>${label}</span><small>${best(m)}</small></button>`).join("")}</div>
       <button class="whenbtn" data-act="when" aria-expanded="${!!s.whenOpen}">${icon("clock", "s")}${esc(when)}</button>
       ${s.whenOpen ? `<div class="whenbox"><div class="modes3 small" role="group">${[["now", "Now", !T.time], ["dep", "Leave at", !!T.time && !T.arriveBy], ["arr", "Arrive by", !!T.time && T.arriveBy]].map(([k, label, on]) => `<button data-when="${k}" aria-pressed="${on}"><span>${label}</span></button>`).join("")}</div>
@@ -593,7 +677,7 @@ VIEWS.plan = {
           + (T.mode === "transit" && s.plan.nextPageCursor ? `<button class="more-btn" data-act="later"${s["later$"] ? " disabled" : ""}>${s["later$"] ? "Loading…" : "Later options"}</button>` : "");
       }
     }
-    return head("Journey", T.to ? `To ${endName(T.to)}` : "Plan a journey") + form + list;
+    return form + list + `<div class="card list opts"><div class="irow">${icon("wheel", "s")}<span>Step-free routes</span>${soon()}</div><div class="irow">${icon("ticket", "s")}<span>Fares and tickets</span>${soon()}</div></div>`;
   },
 };
 function itinOf(s, id) { return id[0] === "i" ? s.plan.itineraries[+id.slice(1)] : s.plan.direct[+id.slice(1)]; }
@@ -674,7 +758,7 @@ const Q = { q: "", results: null, err: null, target: null, seq: 0 };
 const qEl = $("#q"), omni = $("#omni");
 function openOmni(target = null) {
   Q.target = target;
-  qEl.placeholder = target === "from" ? "Start from…" : target === "to" ? "Going to…" : "Search places, stops, addresses";
+  qEl.placeholder = target === "from" ? "Start from…" : target === "to" ? "Going to…" : "Search Wayfinder";
   qEl.value = Q.q = ""; Q.results = null;
   qEl.focus();
   showOmni();
@@ -683,17 +767,17 @@ function showOmni() { omni.innerHTML = omniHtml(); omni.hidden = false; qEl.setA
 function closeOmni() {
   omni.hidden = true; qEl.setAttribute("aria-expanded", "false"); document.body.classList.remove("searching");
   if (document.activeElement === qEl) qEl.blur();
-  Q.target = null; qEl.placeholder = "Search places, stops, addresses";
+  Q.target = null; qEl.placeholder = "Search Wayfinder";
 }
 function resultRow(r, i, kind) {
-  const what = r.type === "STOP" ? "stop" : r.type === "ADDRESS" ? "address" : kind === "recent" ? "recent" : "place";
-  return `<button class="res" data-result="${i}" data-kind="${kind}" role="option"><span class="rk">${what}</span><span class="rn"><b>${esc(r.name)}</b><small>${esc(r.sub ?? subOf(r))}</small></span><span class="rd">${distance(metres(here(), [r.lon, r.lat]))}</span></button>`;
+  const ic = kind === "recent" ? "recent" : kind === "saved" ? "save" : r.type === "STOP" ? (r.modes?.some(m => classOf(m) === "train") ? "train" : r.modes?.includes("TRAM") ? "tram" : "bus") : r.type === "ADDRESS" ? "home" : "pin";
+  return `<button class="res" data-result="${i}" data-kind="${kind}" role="option"><span class="rk">${icon(ic, "s")}</span><span class="rn"><b>${esc(r.name)}</b><small>${esc(r.sub ?? subOf(r))}</small></span><span class="rd">${distance(metres(here(), [r.lon, r.lat]))}</span></button>`;
 }
 function omniHtml() {
   const head2 = Q.target ? `<p class="oh">${Q.target === "from" ? "Choose where you start" : "Choose where you're going"}</p>` : "";
   if (!Q.q.trim()) {
     const rec = store.get("recent", []);
-    return head2 + (Q.target ? `<button class="res" data-act="use-me"><span class="rk">you</span><span class="rn"><b>Your location</b><small>${me ? "Found" : "Or the map centre until it's found"}</small></span><span></span></button>` : "")
+    return head2 + (Q.target ? `<button class="res" data-act="use-me"><span class="rk">${icon("loc-fix", "s")}</span><span class="rn"><b>Your location</b><small>${me ? "Found" : "Or the map centre until it's found"}</small></span><span></span></button>` : "")
       + (saved().length ? `<p class="oh">Saved</p>${saved().map((p, i) => resultRow({ ...p, type: "PLACE" }, i, "saved")).join("")}` : "")
       + (rec.length ? `<p class="oh">Recent</p>${rec.map((r, i) => resultRow(r, i, "recent")).join("")}` : `<p class="oh">Type a street, a place or a stop.</p>`);
   }
@@ -755,13 +839,21 @@ function toggleSaved(s, sub) {
 function rerenderSettings() { if (screen().t === "settings") refresh(screen()); }
 
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-act],[data-line],[data-stop],[data-mode],[data-trip-mode],[data-itin],[data-open],[data-more],[data-result],[data-saved],[data-when],[data-set],[data-theme-set],[data-only],[data-crumb]");
+  const el = e.target.closest("[data-act],[data-line],[data-stop],[data-mode],[data-trip-mode],[data-itin],[data-open],[data-more],[data-result],[data-saved],[data-when],[data-set],[data-theme-set],[data-only],[data-soon],[data-ptab],[data-layer]");
   if (!el || el.disabled) return;
   const d = el.dataset, s = screen();
-  if (d.crumb !== undefined) return backTo(+d.crumb);
+  if (d.soon) return toast(`${d.soon}: coming soon.`);
+  if (d.ptab) { s.tab = d.ptab; return refresh(s); }
+  if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "places") { settings.places = !settings.places; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.more) { s.expanded.add(d.more); return refresh(s); }
   switch (d.act) {
     case "home": return backTo(0);
+    case "menu": return s.t === "menu" ? back() : go({ t: "menu" });
+    case "menu-saved": if (!saved().length) return toast("Nothing saved yet: open a place or stop and press Save."); if (s.t !== "menu") go({ t: "menu" }); return setTimeout(() => $("#savedlist")?.scrollIntoView({ behavior: "smooth" }), 80);
+    case "search-go": return openOmni();
+    case "layers": return toggleLayers();
+    case "transit-chip": settings.transit = !settings.transit; saveSettings(); applyLayers(); if (!$("#layers").hidden) renderLayers(); if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return;
     case "settings": return s.t === "settings" ? back() : go({ t: "settings" });
     case "plan": return s.t === "plan" ? openOmni("to") : go({ t: "plan" });
     case "theme": settings.theme = themeNow() === "dark" ? "light" : "dark"; saveSettings(); applyTheme(); return rerenderSettings();
@@ -807,10 +899,11 @@ document.addEventListener("click", async e => {
     return refresh(s);
   }
   if (d.only) { s.only = s.only === d.only ? null : d.only; return refresh(s); }
+  if (d.set && !$("#layers").hidden) setTimeout(renderLayers, 0);
   if (d.set === "vehicles") { settings.vehicles = net.vehicles = !settings.vehicles; saveSettings(); net.render(true); if (!settings.vehicles) map.getSource("vehicles")?.setData(EMPTY); return rerenderSettings(); }
   if (d.set === "live") { settings.liveOnly = net.liveOnly = !settings.liveOnly; saveSettings(); net.render(true); return rerenderSettings(); }
   if (d.set === "spread") { settings.spread = net.spread = !settings.spread; saveSettings(); net.render(true); return rerenderSettings(); }
-  if (d.themeSet) { settings.theme = d.themeSet; saveSettings(); applyTheme(); return rerenderSettings(); }
+  if (d.themeSet) { settings.theme = d.themeSet; saveSettings(); applyTheme(); if (!$("#layers").hidden) renderLayers(); return rerenderSettings(); }
   if (d.tripMode) { T.mode = d.tripMode; return refresh(s); }
   if (d.when) {
     if (d.when === "now") { T.time = null; T.arriveBy = false; s.whenOpen = false; }
@@ -844,7 +937,7 @@ net.on(debounce(() => {
   const s = screen();
   statusModes();
   if (s.t === "line" && s.data?.lay) meetings(registry.get(s.key), s.data.lay, net).then(m => { s.data.meet = m; refresh(s); });
-  else if (s.t === "here" && net.seen.size !== s.seenCount) { s.seenCount = net.seen.size; refresh(s); }
+  else if (s.t === "explore" && net.seen.size !== s.seenCount) { s.seenCount = net.seen.size; refresh(s); }
 }, 900));
 
 // Map taps: a vehicle opens its trip, a station its departures, a line the line (or a choice of lines).
@@ -872,8 +965,9 @@ map.on("mousemove", e => {
 
 // The status line: how many vehicles move in view, and when they last moved.
 net.onTick(() => {
-  $("#vcount").textContent = net.vehicleCount || 0;
-  $("#stime").textContent = "updated " + new Date().toLocaleTimeString("en-GB", { hourCycle: "h23" });
+  const n = net.vehicleCount || 0;
+  $("#vcount").textContent = n;
+  $("#live").hidden = !n || !settings.vehicles || !settings.transit;
 });
 
 // Start: read a link to a stop, a place or a line before drawing.

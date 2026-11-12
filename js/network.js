@@ -35,18 +35,20 @@ export function networkLayers(t) {
     { id: "trip-bike", type: "line", source: "trip", filter: ["==", ["get", "k"], "bike"], layout: { "line-join": "round", "line-cap": "round" },
       paint: { "line-color": t.bike, "line-width": wide(3, 4, 5.5, 8) } },
   ];
-  const showStation = ["any", [">=", ["zoom"], 14], ["all", [">=", ["zoom"], 9], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 12], [">=", ["get", "n"], 3]]];
+  const showStation = ["any", [">=", ["zoom"], 14.5], ["all", [">=", ["zoom"], 10], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 13], [">=", ["get", "n"], 3]]];
   const stations = [
     // Walking links between stops of one station: a white bar with an outline, as on metro maps.
     { id: "station-links-casing", type: "line", source: "stations", filter: ["all", ["==", ["get", "link"], 1], [">=", ["zoom"], 14]], layout: { "line-cap": "round" },
       paint: { "line-color": t.ring, "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 17, 11] } },
     { id: "station-links", type: "line", source: "stations", filter: ["all", ["==", ["get", "link"], 1], [">=", ["zoom"], 14]], layout: { "line-cap": "round" },
       paint: { "line-color": t.stopFill, "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.4, 17, 6.5] } },
-    { id: "stations", type: "symbol", source: "stations", filter: ["all", ["!=", ["get", "link"], 1], showStation],
-      layout: { "icon-image": ["concat", "stop-", ["get", "kind"]], "icon-allow-overlap": true, "icon-ignore-placement": true,
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 9, ["*", 0.5, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.05]]], 13, ["*", 0.72, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.06]]],
-          16, ["*", 1, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.07]]], 19, ["*", 1.35, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.07]]]],
-        "symbol-sort-key": ["get", "n"] } },
+    // Stops: small far out, where they make room for each other (bigger stations win); all of them close in.
+    ...[["stations-far", 0, 14.5, false], ["stations", 14.5, 24, true]].map(([id, minzoom, maxzoom, overlap]) => ({
+      id, type: "symbol", source: "stations", minzoom, maxzoom, filter: ["all", ["!=", ["get", "link"], 1], showStation],
+      layout: { "icon-image": ["concat", "stop-", ["get", "kind"]], "icon-allow-overlap": overlap, "icon-ignore-placement": overlap, "icon-padding": 1,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 9, ["*", 0.28, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.04]]], 12, ["*", 0.4, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.04]]],
+          14, ["*", 0.55, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.05]]], 16, ["*", 0.8, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.06]]], 19, ["*", 1.15, ["+", 1, ["*", ["min", ["get", "own"], 6], 0.06]]]],
+        "symbol-sort-key": ["-", 0, ["get", "n"]] } })),
     { id: "trip-stops", type: "circle", source: "trip", filter: ["==", ["get", "k"], "stop"],
       paint: { "circle-radius": ["case", ["==", ["get", "end"], 1], 6.5, 3.2], "circle-color": t.stopFill,
         "circle-stroke-color": ["case", ["==", ["get", "end"], 1], t.ring, ["get", "c"]], "circle-stroke-width": ["case", ["==", ["get", "end"], 1], 2.6, 1.6] } },
@@ -60,12 +62,13 @@ export function networkLayers(t) {
       layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "text-allow-overlap": true, "text-ignore-placement": true, "text-max-width": 3 },
       paint: { "text-color": "#fff" } });
   const labels = [
+    // Names only where there's room: big rail stations from zoom 13, busy stops from 15, every stop from 16.5.
     { id: "station-labels", type: "symbol", source: "stations",
-      filter: ["all", ["==", ["get", "lbl"], 1], ["any", [">=", ["zoom"], 15], ["all", [">=", ["zoom"], 11], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 13], [">=", ["get", "n"], 4]]]],
-      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 11, 10.5, 16, 13.5],
-        "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 1, "text-justify": "auto", "text-max-width": 9,
+      filter: ["all", ["==", ["get", "lbl"], 1], ["any", [">=", ["zoom"], 16.5], ["all", [">=", ["zoom"], 13], ["==", ["get", "rail"], 1]], ["all", [">=", ["zoom"], 15], [">=", ["get", "n"], 4]]]],
+      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 13, 10, 17, 12.5],
+        "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 0.8, "text-justify": "auto", "text-max-width": 8, "text-padding": 4,
         "symbol-sort-key": ["-", 0, ["get", "n"]] },
-      paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.7 } },
+      paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.6 } },
     { id: "trip-labels", type: "symbol", source: "trip", filter: ["all", ["==", ["get", "k"], "stop"], ["==", ["get", "end"], 1]],
       layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Bold"], "text-size": 12.5, "text-variable-anchor": ["left", "right", "top", "bottom"], "text-radial-offset": 1 },
       paint: { "text-color": t.label, "text-halo-color": t.halo, "text-halo-width": 1.8 } },
@@ -237,7 +240,7 @@ export class Network {
     for (const id of ["net-lines", "net-casing"]) m.setPaintProperty(id, "line-opacity", op);
     m.setPaintProperty("net-rail-dash", "line-opacity", this.dimmed || this.focusKey ? 0 : 0.9);
     const sop = this.dimmed ? 0.4 : this.focusKey ? ["case", ["in", k, ["get", "lines"]], 1, 0.35] : 1;
-    m.setPaintProperty("stations", "icon-opacity", sop);
+    for (const id of ["stations", "stations-far"]) if (m.getLayer(id)) m.setPaintProperty(id, "icon-opacity", sop);
     for (const id of ["station-links", "station-links-casing"]) m.setPaintProperty(id, "line-opacity", sop);
     m.setPaintProperty("station-labels", "text-opacity", sop);
     if (m.getLayer("vehicles")) {
