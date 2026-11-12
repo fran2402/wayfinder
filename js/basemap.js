@@ -4,21 +4,29 @@
 import { networkSources, networkLayers } from "./network.js";
 export { stopIcon } from "./network.js";
 
+/* The map palette:
+   Water — Blue 250/400/800 · Vegetation — Green 150/200 · City — Grey 50/100/200/300 · Medical — Red 50
+   Sand/shrub — warm Natural 100–300 · Reserves/tundra — green Natural 100–300 · Roads — asphalt greys. */
 export const THEMES = {
-  // A full-colour general map: parks green, water blue, main roads warm. Transit sits on top of it.
   light: {
-    land: "#F5F3EE", water: "#A4CDF0", park: "#CDE7C1", wood: "#BCDDB0", residential: "#EEEBE5", industrial: "#ECE6E1",
-    building: "#E4DED5", buildingLine: "#D7D0C5", road: "#FFFFFF", roadEdge: "#DCD5C9", major: "#FFF6D6", majorEdge: "#E8D49A",
-    motorway: "#FFD98E", motorwayEdge: "#E3A84E", path: "#C9C0B2", rail: "#B9B2A8", boundary: "#A89BC0",
-    label: "#33302B", labelMuted: "#77716A", halo: "#FFFFFF", waterLabel: "#3F78A8", poi: "#6B6156",
-    casing: "#FFFFFF", stopFill: "#FFFFFF", ring: "#1A1A1A", walk: "#1A1A1A", bike: "#1E9B55",
+    land: "#F8F9FA", residential: "#F1F3F4", industrial: "#ECEEF0", building: "#E8EAED", buildingLine: "#DADCE0",
+    water: "#A8C7FA", waterLine: "#669DF6", waterLabel: "#185ABC",
+    park: "#C3E6CB", wood: "#A8DAB5", grass: "#CEEAD6",
+    medical: "#FCE8E6", sand: "#F5F0E4", shrub: "#EFE8D8", farm: "#F3EEE2", reserve: "#E0EBE4", wetland: "#C9DBCF", ice: "#FFFFFF", rock: "#E1E3E6",
+    road: "#E3E5E8", roadEdge: "#D2D5DA", major: "#D2D5DA", majorEdge: "#BDC1C6", motorway: "#BDC1C6", motorwayEdge: "#A6AAB0",
+    path: "#C6CACF", rail: "#B4B8BE", boundary: "#9AA0A6",
+    label: "#3C4043", labelMuted: "#70757A", halo: "#FFFFFF", poi: "#5F6368",
+    casing: "#FFFFFF", stopFill: "#FFFFFF", ring: "#1A1A1A", walk: "#1A1A1A", bike: "#1E8E3E",
   },
   dark: {
-    land: "#1A1D22", water: "#0F2A40", park: "#1B3022", wood: "#1C3324", residential: "#1E2127", industrial: "#20232A",
-    building: "#262A31", buildingLine: "#2E333B", road: "#2C3139", roadEdge: "#1A1D22", major: "#3B3A33", majorEdge: "#1A1D22",
-    motorway: "#5A4A2C", motorwayEdge: "#2A2318", path: "#3A3F47", rail: "#4A5059", boundary: "#5E5373",
-    label: "#E2E4E8", labelMuted: "#9AA0A8", halo: "#1A1D22", waterLabel: "#7AA6CC", poi: "#B4AC9F",
-    casing: "#1A1D22", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#4CC27F",
+    land: "#1F2124", residential: "#232528", industrial: "#25282B", building: "#2B2E32", buildingLine: "#33363B",
+    water: "#16314F", waterLine: "#1F4A7A", waterLabel: "#8AB4F8",
+    park: "#1B3324", wood: "#1E3A28", grass: "#1D3125",
+    medical: "#3A2626", sand: "#2E2B24", shrub: "#2B2924", farm: "#292824", reserve: "#212D27", wetland: "#22332A", ice: "#2F3237", rock: "#2A2C30",
+    road: "#3C4043", roadEdge: "#2A2D30", major: "#4A4E52", majorEdge: "#2A2D30", motorway: "#5F6368", motorwayEdge: "#2A2D30",
+    path: "#45494E", rail: "#55595E", boundary: "#6E737A",
+    label: "#E8EAED", labelMuted: "#9AA0A6", halo: "#1F2124", poi: "#BDC1C6",
+    casing: "#1F2124", stopFill: "#F2F2F2", ring: "#0A0A0A", walk: "#F2F2F2", bike: "#81C995",
   },
 };
 
@@ -51,14 +59,25 @@ export function buildStyle(theme) {
         paint: { "fill-color": t.residential, "fill-opacity": z(9, 0, 12, 1) } },
       { id: "landuse-industrial", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("industrial", "commercial", "retail", "railway"),
         paint: { "fill-color": t.industrial } },
-      { id: "landcover-wood", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wood", "forest"), paint: { "fill-color": t.wood, "fill-opacity": 0.8 } },
-      { id: "landcover-grass", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 9, filter: cls("grass", "park", "meadow"), paint: { "fill-color": t.park, "fill-opacity": 0.7 } },
-      { id: "park", type: "fill", source: "omt", "source-layer": "park", paint: { "fill-color": t.park } },
+      // Natural ground: sand and beaches, shrub and heath, farmland, wetland, ice and rock.
+      { id: "landcover-farm", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 8, filter: cls("farmland"), paint: { "fill-color": t.farm } },
+      { id: "landcover-sand", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("sand"), paint: { "fill-color": t.sand } },
+      { id: "landcover-shrub", type: "fill", source: "omt", "source-layer": "landcover", filter: ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false], paint: { "fill-color": t.shrub } },
+      { id: "landcover-wetland", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wetland"), paint: { "fill-color": t.wetland } },
+      { id: "landcover-ice", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("ice"), paint: { "fill-color": t.ice } },
+      { id: "landcover-rock", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("rock"), paint: { "fill-color": t.rock } },
+      // Vegetation.
+      { id: "landcover-wood", type: "fill", source: "omt", "source-layer": "landcover", filter: cls("wood", "forest"), paint: { "fill-color": t.wood } },
+      { id: "landcover-grass", type: "fill", source: "omt", "source-layer": "landcover", minzoom: 9, filter: ["all", cls("grass", "park", "meadow"), ["!", ["match", ["get", "subclass"], ["scrub", "heath", "fell"], true, false]]], paint: { "fill-color": t.grass } },
+      { id: "park-reserve", type: "fill", source: "omt", "source-layer": "park", filter: cls("nature_reserve", "national_park", "protected_area"), paint: { "fill-color": t.reserve, "fill-opacity": 0.85 } },
+      { id: "park", type: "fill", source: "omt", "source-layer": "park", filter: ["!", cls("nature_reserve", "national_park", "protected_area")], paint: { "fill-color": t.park } },
       { id: "landuse-green", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 11, filter: cls("cemetery", "pitch", "playground", "garden", "stadium"),
         paint: { "fill-color": t.park, "fill-opacity": 0.8 } },
+      // Medical.
+      { id: "landuse-medical", type: "fill", source: "omt", "source-layer": "landuse", minzoom: 12, filter: cls("hospital"), paint: { "fill-color": t.medical } },
       { id: "water", type: "fill", source: "omt", "source-layer": "water", filter: ["!=", ["get", "brunnel"], "tunnel"], paint: { "fill-color": t.water } },
       { id: "waterway", type: "line", source: "omt", "source-layer": "waterway", minzoom: 9, filter: notTunnel,
-        paint: { "line-color": t.water, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
+        paint: { "line-color": t.waterLine, "line-width": z(9, 0.6, 14, 2, 18, 6) } },
       { id: "aeroway", type: "fill", source: "omt", "source-layer": "aeroway", minzoom: 11, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": t.industrial } },
       { id: "building", type: "fill", source: "omt", "source-layer": "building", minzoom: 14,
         paint: { "fill-color": t.building, "fill-outline-color": t.buildingLine, "fill-opacity": z(14, 0, 15, 1) } },
