@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Wayfinder</title>
-<meta name="description" content="Public transport on an open map: every line drawn like a metro map, live departures, line diagrams and journey planning.">
-<meta name="theme-color" content="#F4F4F5">
+<meta name="description" content="Public transport on an open map: every line running now, moving vehicles, departure boards, line diagrams and journey planning.">
+<meta name="theme-color" content="#FFFFFF">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://api.transitous.org" crossorigin>
 <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..900&family=Geist+Mono:wght@400..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400..800&family=JetBrains+Mono:wght@400..700&display=swap">
 <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
-<body data-screen="explore">
+<body data-screen="here">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
 <symbol id="i-search" viewBox="0 0 256 256"><path d="M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z"/></symbol>
 <symbol id="i-back" viewBox="0 0 256 256"><path d="M228,128a12,12,0,0,1-12,12H69l51.52,51.51a12,12,0,0,1-17,17l-72-72a12,12,0,0,1,0-17l72-72a12,12,0,0,1,17,17L69,116H216A12,12,0,0,1,228,128Z"/></symbol>
@@ -59,38 +59,51 @@
 <symbol id="i-path" viewBox="0 0 256 256"><path d="M200,164a36.07,36.07,0,0,0-33.94,24H72a28,28,0,0,1,0-56h96a44,44,0,0,0,0-88H72a12,12,0,0,0,0,24h96a20,20,0,0,1,0,40H72a52,52,0,0,0,0,104h94.06A36,36,0,1,0,200,164Zm0,48a12,12,0,1,1,12-12A12,12,0,0,1,200,212Z"/></symbol>
 <symbol id="i-wheelchair" viewBox="0 0 256 256"><path d="M255.14,187.54a12,12,0,0,0-15.6-6.68l-9.75,3.9-27.06-54.13A12,12,0,0,0,192,124H116V108h52a12,12,0,0,0,0-24H116V77.81a34,34,0,1,0-24,0v8.88a76,76,0,1,0,88.35,106.57,12,12,0,1,0-21.57-10.52A52,52,0,1,1,92,112v24a12,12,0,0,0,12,12h80.58l28.68,57.37a12,12,0,0,0,15.19,5.77l20-8A12,12,0,0,0,255.14,187.54ZM104,36A10,10,0,1,1,94,46,10,10,0,0,1,104,36Z"/></symbol>
   <symbol id="i-minus" viewBox="0 0 256 256"><path d="M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z"/></symbol>
-  <symbol id="i-logo" viewBox="0 0 32 32"><path d="M6 24 L13 9 L19 19 L26 7" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="13" cy="9" r="3.4" fill="var(--logo-dot, #fff)" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="19" r="3.4" fill="var(--logo-dot, #fff)" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="i-logo" viewBox="0 0 32 32"><path d="M6 24 L13 9 L19 19 L26 7" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="13" cy="9" r="3.4" fill="var(--bg)" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="19" r="3.4" fill="var(--bg)" stroke="currentColor" stroke-width="2"/></symbol>
 </svg>
+
+<!-- The bar: name, the search field (results drop down under it), and the few things you always need. -->
+<header class="bar">
+  <button class="brand" data-act="home" aria-label="Wayfinder, back to Here"><svg class="mark" aria-hidden="true"><use href="#i-logo"/></svg><span>Wayfinder</span></button>
+  <div class="omni" id="omniwrap">
+    <label class="qbox"><svg class="ic s" aria-hidden="true"><use href="#i-search"/></svg>
+      <input id="q" type="search" placeholder="Search places, stops, addresses" autocomplete="off" enterkeyhint="search" aria-label="Search" aria-controls="omni" aria-expanded="false">
+      <kbd>/</kbd></label>
+    <div id="omni" class="omni-list" hidden role="listbox"></div>
+  </div>
+  <nav class="tools">
+    <button class="tool" data-act="plan"><svg class="ic s" aria-hidden="true"><use href="#i-dir"/></svg><span>Plan</span></button>
+    <button class="tool icon" data-act="theme" aria-label="Light or dark" title="Light or dark"><svg class="ic s" aria-hidden="true"><use href="#i-moon"/></svg></button>
+    <button class="tool icon" data-act="settings" aria-label="Settings" title="Settings"><svg class="ic s" aria-hidden="true"><use href="#i-gear"/></svg></button>
+  </nav>
+</header>
 
 <main id="map" aria-label="Map"></main>
 
-<!-- Phones: floats over the map. Wide screens: the search lives in the panel instead. -->
-<div id="top" class="top"></div>
-
-<div id="live" class="live" hidden role="status"><i></i><b>0</b><span>vehicles moving</span></div>
-
-<div id="mapctl" class="mapctl">
-  <div id="busy" class="busy" hidden><span class="spinner"></span><span>Loading lines</span></div>
-  <div class="zoom" role="group" aria-label="Zoom">
-    <button id="zin" class="ctl" aria-label="Zoom in"><svg class="ic s"><use href="#i-plus"/></svg></button>
-    <button id="zout" class="ctl" aria-label="Zoom out"><svg class="ic s"><use href="#i-minus"/></svg></button>
-  </div>
-  <button id="locate" class="ctl big" aria-label="Show my location"><svg class="ic"><use href="#i-loc-fix"/></svg></button>
-</div>
-
-<aside id="panel" class="panel anim" aria-label="Details">
-  <header class="appbar">
-    <button class="brand" data-act="home" aria-label="Wayfinder, start"><span class="logo"><svg><use href="#i-logo"/></svg></span><span class="word">Wayfinder</span></button>
-    <button class="ghost-round" data-act="settings" aria-label="Settings" title="Settings"><svg class="ic"><use href="#i-gear"/></svg></button>
-  </header>
+<!-- The inspector: what you're looking at, with the way back as breadcrumbs. A sheet on phones. -->
+<aside id="insp" class="insp anim" aria-label="Details">
   <div id="grip" class="grip" role="separator" aria-label="Drag to resize"><span></span></div>
-  <div id="ptop" class="ptop"></div>
+  <nav id="crumbs" class="crumbs" aria-label="Where you are"></nav>
   <div id="body" class="body"></div>
 </aside>
 
-<section id="page" class="page" hidden></section>
-<div id="toast" class="toast" role="status" hidden></div>
+<div id="mapctl" class="mapctl">
+  <button id="zin" class="ctl" aria-label="Zoom in"><svg class="ic s"><use href="#i-plus"/></svg></button>
+  <button id="zout" class="ctl" aria-label="Zoom out"><svg class="ic s"><use href="#i-minus"/></svg></button>
+  <button id="locate" class="ctl" aria-label="Show my location"><svg class="ic s"><use href="#i-loc-fix"/></svg></button>
+</div>
 
+<!-- The status line: what's live, when it last moved, and which kinds of transport are shown. -->
+<footer class="status" id="status">
+  <span class="st-live"><i></i><b id="vcount">0</b> moving</span>
+  <span id="stime" class="st-dim"></span>
+  <span id="sbusy" class="st-dim" hidden>loading lines…</span>
+  <span class="st-sp"></span>
+  <span id="smodes" class="st-modes"></span>
+  <span id="szoom" class="st-dim"></span>
+</footer>
+
+<div id="toast" class="toast" role="status" hidden></div>
 <noscript>Wayfinder needs JavaScript to draw the map.</noscript>
 <script src="vendor/maplibre-gl/maplibre-gl.js"></script>
 <script type="module" src="js/app.js"></script>

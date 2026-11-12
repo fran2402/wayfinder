@@ -13,7 +13,7 @@ as it is. Push to `main` and the "Publish site" workflow puts it on GitHub Pages
 - Departure boards with live and late times; stations that share a name are one station.
 - Whole-line diagrams with branches; journey planning by public transport, walking or cycling.
 - Links for stops, places and lines; the browser's Back steps through screens.
-- Search as a command palette (`/` or Ctrl/⌘ K); works offline once loaded and installs like an app.
+- Search in the bar (`/` or Ctrl/⌘ K), breadcrumbs for the way back, a status line with what is live; works offline once loaded and installs like an app.
 
 ## Run it locally
 
@@ -45,4 +45,4 @@ map, the loaded network and the current screens.
 
 - Timetables, live times, routing and line shapes: [Transitous](https://transitous.org) (community-run, free; please use it fairly).
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org) © OpenMapTiles.
-- Fonts: Geist and Geist Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
+- Fonts: Inter Tight and JetBrains Mono (Google Fonts). Icons: [Phosphor](https://phosphoricons.com) (MIT).
