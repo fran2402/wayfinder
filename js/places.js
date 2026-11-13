@@ -2,7 +2,7 @@
 // and their details from OpenStreetMap when tapped (opening hours, phone, website, address…).
 
 import { PLACE_ICONS, GLYPHS } from "./placeicons.js";
-import { ensureAll } from "./icons.js";
+import { ensure, ensureIdle } from "./icons.js";
 
 const idOf = key => "pl-" + key.replace("/", "--");
 const OTHER = ["dot-outline", "#6E7681", "Place"];
@@ -13,8 +13,14 @@ export function placeSvg(key, size = 28) {
   const d = GLYPHS[g] || "M128 88a40 40 0 1 1-40 40 40 40 0 0 1 40-40z";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 28 28"><circle cx="14" cy="14" r="13.4" fill="#fff"/><circle cx="14" cy="14" r="11.8" fill="${colour}"/><path d="${d}" fill="#fff" transform="translate(7.2 7.2) scale(${13.6 / 256})"/></svg>`;
 }
+const defOf = k => () => ({ svg: placeSvg(k), w: 28, h: 28, ratio: 3 });
+/** The common ones a few at a time while idle; any other the moment the map asks for it. */
 export function preloadPlaceIcons() {
-  return ensureAll([...Object.keys(PLACE_ICONS), "other"].map(k => [idOf(k), () => ({ svg: placeSvg(k), w: 28, h: 28, ratio: 3 })]));
+  ensureIdle([...Object.keys(PLACE_ICONS), "other"].map(k => [idOf(k), defOf(k)]));
+}
+export function placeIcon1(id) {
+  const k = id.slice(3).replace("--", "/");
+  if (PLACE_ICONS[k] || k === "other") ensure(id, defOf(k));
 }
 
 const SUB_KEYS = Object.keys(PLACE_ICONS).filter(k => k.includes("/"));

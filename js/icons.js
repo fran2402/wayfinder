@@ -55,3 +55,11 @@ export function ensure(id, def) {
 }
 
 export const ensureAll = list => Promise.all(list.map(([id, def]) => ensure(id, def)));
+
+/** Like ensureAll, but a few at a time when the browser is idle: no stutter at startup. */
+export function ensureIdle(list) {
+  const idle = window.requestIdleCallback || (fn => setTimeout(fn, 60));
+  let i = 0;
+  const step = () => { const part = list.slice(i, i + 6); i += 6; if (!part.length) return; ensureAll(part).then(() => idle(step)); };
+  idle(step);
+}

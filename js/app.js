@@ -20,7 +20,7 @@ import { attach as attachIcons } from "./icons.js";
 import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
 import { preloadHikeIcons, HIKE_LAYER_IDS } from "./hiking.js";
 import { vehicleIcon } from "./vehicles.js";
-import { preloadPlaceIcons, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
+import { preloadPlaceIcons, placeIcon1, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
 import { layoutLine, meetings, lineDiagramHtml, drawLineDiagram, summaryHtml } from "./diagram.js";
@@ -44,6 +44,8 @@ const linkView = (() => { const m = /(?:^|&)map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)
 const START = linkView || store.get("view", { center: [15.977, 45.8131], zoom: 13.4 });
 const map = new maplibregl.Map({
   container: "map", style: buildStyle(themeNow()), center: START.center, zoom: START.zoom,
+  // Phones with very dense screens draw 2¼× fewer pixels at 2× than at 3×, and look the same.
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
   attributionControl: false, dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, minZoom: 3, maxZoom: 19, fadeDuration: 120,
 });
 map.on("error", e => console.warn("Map:", e.error?.message || e));
@@ -54,6 +56,7 @@ map.on("styleimagemissing", e => {
   if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
   if (e.id.startsWith("sm-")) return seaIcon(e.id);
   if (vehicleIcon(e.id)) return;
+  if (e.id.startsWith("pl-")) return placeIcon1(e.id);
   if (/^(rwy-|air-|shield-|road-|ski-|pl-|hike-|plane)/.test(e.id) || e.id === "peak" || e.id === "volcano") return; // drawn as SVG (icons.js), on their way
   // A place kind the base map's sprite has no icon for: a small dot instead.
   const c = document.createElement("canvas"); c.width = c.height = 24; const g = c.getContext("2d");

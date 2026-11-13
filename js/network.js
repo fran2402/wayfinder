@@ -21,7 +21,7 @@ export function networkSources() {
 /** Layers for three slots in the base style: lines under the labels, stations, labels on top. */
 export function networkLayers(t) {
   const lines = [
-    { id: "net-casing", type: "line", source: "network", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["get", "s"] },
+    { id: "net-casing", type: "line", source: "network", minzoom: 13.5, layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["get", "s"] },
       paint: { "line-color": t.casing, "line-width": scaled("w", 2.4), "line-offset": scaled("off") } },
     { id: "net-lines", type: "line", source: "network", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["get", "s"] },
       paint: { "line-color": ["get", "c"], "line-width": scaled("w", 0.4), "line-offset": scaled("off") } },
@@ -204,6 +204,8 @@ export class Network {
       this.lastMs = m.ms;
       this.emit();
     } else if (m.type === "vehicles") {
+      // Not while the map is being moved (redrawing them then makes panning stutter).
+      if (this.map.isMoving() || this.map.isZooming()) return;
       this.vehicleCount = m.features.length;
       for (const f of m.features) { const c = f.properties.c; if (!/^#[0-9a-fA-F]{6}$/.test(c)) f.properties.c = "#5F6368"; f.properties.d = isDarkText(f.properties.c) ? 1 : 0; }
       this.map.getSource("vehicles")?.setData({ type: "FeatureCollection", features: m.features });

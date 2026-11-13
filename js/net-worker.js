@@ -189,15 +189,7 @@ function ingest(d, zq, box) {
   });
   // Shapes: each polyline once, with every line that uses it, per kind of way.
   const copies = new Map();
-  d.polylines.forEach(p => {
-    const byGroup = new Map();
-    for (const ri of p.routeIndexes) {
-      const v = lineOf[ri]; if (!v) continue;
-      const g = GROUP[v.line.cls];
-      if (!byGroup.has(g)) byGroup.set(g, new Set());
-      byGroup.get(g).add(v);
-    }
-    if (!byGroup.size) return;
+  const lay = (p, byGroup) => {
     const pts = decode(p.polyline.points, p.polyline.precision ?? 6);
     if (pts.length < 2) return;
     // Feeds often carry near-copies of one shape (same ends, same length): lay it down once.
@@ -212,7 +204,36 @@ function ingest(d, zq, box) {
       const maxJump = (g === "rail" || g === "water" ? 8000 : 1200) * stretch;
       copies.set(dk, graphFor(zq, g).add(pts, vs, mbox, maxJump));
     }
+  };
+  // Bus shapes are most of the work and only drawn from zoom 13: trains, metros and trams are laid
+  // down (and drawn) first, the buses right after, in slices.
+  let buses = 0;
+  d.polylines.forEach(p => {
+    const byGroup = new Map();
+    let onlyBus = true;
+    for (const ri of p.routeIndexes) {
+      const v = lineOf[ri]; if (!v) continue;
+      if (v.line.cls !== "bus") onlyBus = false;
+      const g = GROUP[v.line.cls];
+      if (!byGroup.has(g)) byGroup.set(g, new Set());
+      byGroup.get(g).add(v);
+    }
+    if (!byGroup.size) return;
+    if (onlyBus) { later.push(() => lay(p, byGroup)); buses++; } else lay(p, byGroup);
   });
+  if (buses) { later.push("render"); setTimeout(pumpLater, 0); }
+}
+const later = [];
+let pumping = false;
+function pumpLater() {
+  if (pumping) return;
+  pumping = true;
+  const t0 = performance.now();
+  let draw = false;
+  while (later.length && performance.now() - t0 < 60) { const job = later.shift(); if (job === "render") { draw = true; break; } job(); }
+  pumping = false;
+  if (draw && opts.zoom >= DRAW_FROM.bus) render();
+  if (later.length) setTimeout(pumpLater, 0);
 }
 
 /* ------------------------------ Stations with the same name ------------------------------ */
@@ -331,10 +352,15 @@ function markRunning() {
 }
 // A line is drawn while it isn't known yet whether it runs (its area's live data is still on its way).
 const inUnknown = l => { if (!l.bbox) return true; for (const b of unknown.values()) if (b[0] <= l.bbox[2] && b[2] >= l.bbox[0] && b[1] <= l.bbox[3] && b[3] >= l.bbox[1]) return true; return false; };
-const isRunning = l => !opts.liveOnly || running.has(l.cls + "|" + norm(l.name)) || inUnknown(l);
-const variantRuns = v => !opts.liveOnly || (isRunning(v.line) && (v.run || !v.line.anyRun || inUnknown(v.line)));
-const visible = l => opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls] && isRunning(l);
-const shownVariant = v => visible(v.line) && variantRuns(v);
+// These are asked thousands of times per build: each answer is kept until something changes (stamp).
+let stamp = 1;
+const fresh = () => { stamp++; };
+const runKey = l => l.rk || (l.rk = l.cls + "|" + norm(l.name));
+const unk = l => { if (l.us !== stamp) { l.us = stamp; l.uv = inUnknown(l); } return l.uv; };
+const isRunning = l => !opts.liveOnly || running.has(runKey(l)) || unk(l);
+const variantRuns = v => !opts.liveOnly || (isRunning(v.line) && (v.run || !v.line.anyRun || unk(v.line)));
+const visible = l => { if (l.vs !== stamp) { l.vs = stamp; l.vv = opts.enabledSet.has(l.cls) && l.minZoom <= opts.bucket && opts.zoom >= DRAW_FROM[l.cls] && isRunning(l); } return l.vv; };
+const shownVariant = v => { if (v.ss !== stamp) { v.ss = stamp; v.sv = visible(v.line) && variantRuns(v); } return v.sv; };
 
 function buildNetwork() {
   const out = [];
@@ -477,6 +503,7 @@ async function render() {
     const t0 = performance.now();
     rankLines();
     markRunning();
+    fresh();
     const net = bytes(buildNetwork()), sta = bytes(buildStations());
     const lines = [...dirty].map(lineInfo); dirty.clear();
     postMessage({ type: "data", network: net, stations: sta, lines, seen: [...seen], ms: Math.round(performance.now() - t0) }, [net, sta]);
@@ -495,14 +522,23 @@ async function loadTile(t) {
   unknown.set(t.key, t.box);
   loadLive(t); // what runs there, at the same time as the lines themselves
   try {
-    const res = await fetch(`${API}/experimental/map/routes?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&language=en`, { signal: ctrl.signal });
-    if (!res.ok) {
+    const url = `${API}/experimental/map/routes?zoom=${t.zq}&min=${f(s)},${f(w)}&max=${f(n)},${f(e)}&language=en`;
+    // Lines change rarely: an area fetched in the last 6 hours comes straight from the browser's cache.
+    let cache = null, d = null;
+    try { cache = await caches.open("wayfinder-routes-v1"); const hit = await cache.match(url); if (hit && Date.now() - +hit.headers.get("x-at") < 6 * 36e5) d = await hit.json(); } catch { cache = null; }
+    const res = d ? null : await fetch(url, { signal: ctrl.signal });
+    if (res && !res.ok) {
       let msg = String(res.status);
       try { msg = (await res.json()).error || msg; } catch { /* not JSON */ }
       postMessage({ type: "tile", key: t.key, status: /too many/i.test(msg) ? "split" : "failed" });
       return;
     }
-    const d = await res.json();
+    if (!d) {
+      const text = await res.text();
+      d = JSON.parse(text);
+      if (cache) cache.put(url, new Response(text, { headers: { "content-type": "application/json", "x-at": String(Date.now()) } }))
+        .then(async () => { const ks = await cache.keys(); for (const k of ks.slice(0, Math.max(0, ks.length - 14))) cache.delete(k); }).catch(() => {});
+    }
     try { ingest(d, t.zq, t.box); } catch (err) { postMessage({ type: "error", message: String(err && err.stack || err) }); }
     runDirty = true;
     render(); // draw this tile's lines now, without waiting for the rest
@@ -600,10 +636,11 @@ function vehicles() {
   }
   return out;
 }
-setInterval(() => { if (opts.vehicles && live.size) postMessage({ type: "vehicles", features: vehicles() }); }, 1000);
+setInterval(() => { if (opts.vehicles && live.size) postMessage({ type: "vehicles", features: vehicles() }); }, 2000);
 
 function query(q, a) {
   markRunning();
+  fresh();
   const linesNear = (lon, lat, radius) => {
     const out = new Set(), cosl = Math.cos(lat * RAD);
     for (const st of stations.values()) {
@@ -668,6 +705,7 @@ globalThis.onmessage = ({ data: m }) => {
   else if (m.type === "render") {
     const b = m.opts.box;
     opts = { ...m.opts, enabledSet: new Set(m.opts.enabled), mbox: [mx(b[0]), my(b[1]), mx(b[2]), my(b[3])] };
+    fresh();
     render();
   }
   else if (m.type === "query") postMessage({ type: "answer", id: m.id, result: query(m.q, m.args) });

@@ -38,11 +38,15 @@ function widths(edge) {
 const byClass = (t, motorway, major, mid, road, ped) => ["match", kind, "motorway", motorway, ["trunk", "primary"], major, ["secondary", "tertiary"], mid, "pedestrian", ped, road];
 const sortKey = (extra = 0) => ["+", ["case", isRamp, 5, ["match", kind, ...Object.entries(RANK).flat(), 1]], extra];
 
+const MAIN = ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary", "tertiary"], true, false];
 function set(t, id, filter, { casing, fill, dash, opacity = 1, sort }) {
   return [
-    { id: id + "-casing", type: "line", source: "omt", "source-layer": "transportation", minzoom: 5, filter,
+    // Outlines: main roads from far out; small streets only from zoom 14 (below that an outline is
+    // a fraction of a pixel, and drawing every street twice is the most expensive thing on the map).
+    ...[[id + "-casing", 5, ["all", filter, MAIN]], [id + "-casing-minor", 14, ["all", filter, ["!", MAIN]]]].map(([cid, minzoom, f]) => (
+    { id: cid, type: "line", source: "omt", "source-layer": "transportation", minzoom, filter: f,
       layout: { "line-join": "round", "line-cap": dash ? "butt" : "round", "line-sort-key": sort },
-      paint: { "line-color": casing, "line-width": widths(true), "line-opacity": opacity, ...(dash ? { "line-dasharray": dash } : {}) } },
+      paint: { "line-color": casing, "line-width": widths(true), "line-opacity": opacity, ...(dash ? { "line-dasharray": dash } : {}) } })),
     { id, type: "line", source: "omt", "source-layer": "transportation", minzoom: 5, filter,
       layout: { "line-join": "round", "line-cap": "round", "line-sort-key": sort },
       paint: { "line-color": fill, "line-width": widths(false), "line-opacity": opacity } },

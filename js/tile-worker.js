@@ -85,28 +85,39 @@ async function waterMask(template, z, x, y) {
 }
 
 async function depthTile(z, x, y, palette, omt) {
-  const maskP = waterMask(omt, z, x, y).catch(() => null);
   const stops = [];
   for (let i = 0; i < palette.length; i += 2) stops.push([palette[i], parseColour(palette[i + 1])]);
   const zs = Math.min(z, 8), f = 2 ** (z - zs);
   // Texel range of the source zoom this tile needs (with 2 texels of margin for the spline).
   const gx0 = Math.floor(x * SIZE / f) - 2, gy0 = Math.floor(y * SIZE / f) - 2, gx1 = Math.ceil((x + 1) * SIZE / f) + 2, gy1 = Math.ceil((y + 1) * SIZE / f) + 2;
-  const tiles = new Map();
-  for (let ty = Math.floor(gy0 / SIZE); ty <= Math.floor(gy1 / SIZE); ty++) for (let tx = Math.floor(gx0 / SIZE); tx <= Math.floor(gx1 / SIZE); tx++) tiles.set(tx + "," + ty, await demTile(zs, tx, ty));
-  if (![...tiles.values()].some(Boolean)) return null;
-  const at = (gx, gy) => {
-    const tx = Math.floor(gx / SIZE), ty = Math.floor(gy / SIZE), t = tiles.get(tx + "," + ty);
-    if (!t) return 0;
-    return t[(gy - ty * SIZE) * SIZE + (gx - tx * SIZE)];
-  };
+  const jobs = [];
+  for (let ty = Math.floor(gy0 / SIZE); ty <= Math.floor(gy1 / SIZE); ty++) for (let tx = Math.floor(gx0 / SIZE); tx <= Math.floor(gx1 / SIZE); tx++) jobs.push(demTile(zs, tx, ty).then(t => [tx, ty, t]));
+  const tiles = await Promise.all(jobs);
+  if (!tiles.some(t => t[2])) return null;
+  // The texels as one flat grid; all land (nothing below −2 m): nothing to draw, nothing more to fetch.
+  const gw = gx1 - gx0 + 1, gh = gy1 - gy0 + 1, grid = new Float32Array(gw * gh);
+  let sea = false;
+  for (const [tx, ty, t] of tiles) {
+    if (!t) continue;
+    const X0 = Math.max(gx0, tx * SIZE), X1 = Math.min(gx1, tx * SIZE + SIZE - 1), Y0 = Math.max(gy0, ty * SIZE), Y1 = Math.min(gy1, ty * SIZE + SIZE - 1);
+    for (let gy = Y0; gy <= Y1; gy++) for (let gx = X0; gx <= X1; gx++) { const v = t[(gy - ty * SIZE) * SIZE + (gx - tx * SIZE)]; grid[(gy - gy0) * gw + (gx - gx0)] = v; if (v < -2) sea = true; }
+  }
+  if (!sea) return null;
+  const maskP = waterMask(omt, z, x, y).catch(() => null);
   const img = new ImageData(SIZE, SIZE), d = img.data;
   const row = new Float32Array(4);
   let any = false;
   for (let py = 0; py < SIZE; py++) {
-    const sy = (y * SIZE + py + 0.5) / f - 0.5, iy = Math.floor(sy), fy = sy - iy;
+    const sy = (y * SIZE + py + 0.5) / f - 0.5, iy = Math.floor(sy), fy = sy - iy, ry = iy - gy0;
     for (let px = 0; px < SIZE; px++) {
-      const sx = (x * SIZE + px + 0.5) / f - 0.5, ix = Math.floor(sx), fx = sx - ix;
-      for (let k = -1; k <= 2; k++) row[k + 1] = cr(at(ix - 1, iy + k), at(ix, iy + k), at(ix + 1, iy + k), at(ix + 2, iy + k), fx);
+      const sx = (x * SIZE + px + 0.5) / f - 0.5, ix = Math.floor(sx), fx = sx - ix, rx = ix - gx0;
+      let min = Infinity;
+      for (let k = -1; k <= 2; k++) {
+        const o = (ry + k) * gw + rx, p0 = grid[o - 1], p1 = grid[o], p2 = grid[o + 1], p3 = grid[o + 2];
+        if (p0 < min) min = p0; if (p1 < min) min = p1; if (p2 < min) min = p2; if (p3 < min) min = p3;
+        row[k + 1] = cr(p0, p1, p2, p3, fx);
+      }
+      if (min >= -2) continue; // land all around: stays transparent
       const e = cr(row[0], row[1], row[2], row[3], fy);
       // Colour by depth: between stops, blended.
       let c;

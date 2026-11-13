@@ -7,15 +7,19 @@ import { THEMES } from "./basemap.js";
 // Ski runs and sea marks come as single vector-tile files (PMTiles), read by byte ranges.
 if (typeof pmtiles !== "undefined") maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
 
-const worker = new Worker(new URL("./tile-worker.js", import.meta.url));
+// Two workers, taking turns, so a slow depth tile never holds up the next one.
 const pending = new Map();
 let seq = 0;
-worker.onmessage = ({ data: m }) => {
-  const p = pending.get(m.id); pending.delete(m.id);
-  if (!p) return;
-  if (m.error || m.status) p.reject(new Error(m.error || "HTTP " + m.status)); else p.resolve(m.buf);
-};
-const ask = msg => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); worker.postMessage({ ...msg, id }); });
+const workers = [0, 1].map(() => {
+  const w = new Worker(new URL("./tile-worker.js", import.meta.url));
+  w.onmessage = ({ data: m }) => {
+    const p = pending.get(m.id); pending.delete(m.id);
+    if (!p) return;
+    if (m.error || m.status) p.reject(new Error(m.error || "HTTP " + m.status)); else p.resolve(m.buf);
+  };
+  return w;
+});
+const ask = msg => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); workers[id % workers.length].postMessage({ ...msg, id }); });
 
 let blank = null;
 async function blankPng() {
@@ -35,7 +39,7 @@ maplibregl.addProtocol("wfdepth", async params => {
 });
 
 let omtMax = 14;
-maplibregl.addProtocol("wfomt", async params => {
+maplibregl.addProtocol("wfomt", async (params, abort) => {
   if (params.url === "wfomt://planet") {
     // The tile description: same tiles, but fetched through the smoothing worker.
     const tj = await (tilejson ||= fetch(OMT).then(r => r.json()));
@@ -44,6 +48,12 @@ maplibregl.addProtocol("wfomt", async params => {
   }
   const url = "https://" + params.url.slice("wfomt://".length);
   const z = +(url.match(/\/(\d+)\/\d+\/\d+\.pbf/) || [])[1];
-  const buf = await ask({ kind: "mvt", url, smooth: z >= omtMax });
+  // Only the most detailed tiles are smoothed (in a worker); all others come straight from the network.
+  if (z < omtMax) {
+    const res = await fetch(url, { signal: abort?.signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return { data: await res.arrayBuffer() };
+  }
+  const buf = await ask({ kind: "mvt", url, smooth: true });
   return { data: buf };
 });

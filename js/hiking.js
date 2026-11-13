@@ -41,7 +41,7 @@ export function hikeLayers(t) {
     ],
     paths: [
       // Trails: a brown dashed line, a white edge so they read on any ground.
-      path("path-trail-edge", ["all", ["==", ["get", "class"], "path"], sub("path", "bridleway")], { "line-color": t.halo, "line-width": zl(13, 2.4, 18, 5), "line-opacity": 0.6 }),
+      path("path-trail-edge", ["all", ["==", ["get", "class"], "path"], sub("path", "bridleway")], { "line-color": t.halo, "line-width": zl(13, 2.4, 18, 5), "line-opacity": 0.6 }, 15),
       path("path-trail", ["all", ["==", ["get", "class"], "path"], sub("path")], { "line-color": t.trail, "line-width": zl(13, 1.1, 18, 2.6), "line-dasharray": [2.2, 1.2] }),
       path("path-bridleway", ["all", ["==", ["get", "class"], "path"], sub("bridleway")], { "line-color": "#3E8E41", "line-width": zl(13, 1.1, 18, 2.4), "line-dasharray": [3, 1.4] }),
       path("path-footway", ["all", ["==", ["get", "class"], "path"], sub("footway", "sidewalk", "crossing", "corridor")], { "line-color": t.footway, "line-width": zl(14, 0.9, 18, 2.4), "line-dasharray": [1, 0.9] }, 14.5),

@@ -10,7 +10,7 @@ import { debounce } from "./util.js";
 import { iconDef, FLARE, MAG, STATIC } from "./seamarks-core.js";
 
 /** The icons the base map itself uses (marinas and ferry terminals from its own tiles). */
-export function preloadSeaIcons() { return ensureAll(Object.keys(STATIC).map(id => [id, iconDef(id)])); }
+export function preloadSeaIcons() { return ensureAll(["sm-harbour", "sm-marina", "sm-ferry", "sm-arrow"].map(id => [id, iconDef(id)])); }
 /** What a mark is, from its icon id: for its panel's title. */
 export function seaKind(icon = "") {
   if (icon.startsWith("sm-b-")) return /stake|tower|lattice|cairn/.test(icon) ? "Beacon" : "Buoy";
