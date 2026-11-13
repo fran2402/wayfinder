@@ -539,6 +539,15 @@ async function loadTile(t) {
       if (cache) cache.put(url, new Response(text, { headers: { "content-type": "application/json", "x-at": String(Date.now()) } }))
         .then(async () => { const ks = await cache.keys(); for (const k of ks.slice(0, Math.max(0, ks.length - 14))) cache.delete(k); }).catch(() => {});
     }
+    // Grown too big (a long session over many places): let go of everything and start again from
+    // what's in view (mostly from the browser's cache).
+    if (stations.size > 60000 || [...graphs.values()].reduce((a, g) => a + g.nodes.length, 0) > 1500000) {
+      for (const c of inflight.values()) c.abort();
+      graphs.clear(); stations.clear(); pairs.clear(); variants.clear(); live.clear(); unknown.clear(); groups.clear(); later.length = 0;
+      groupsDirty = true; recomputeRunning();
+      postMessage({ type: "reset" });
+      return;
+    }
     try { ingest(d, t.zq, t.box); } catch (err) { postMessage({ type: "error", message: String(err && err.stack || err) }); }
     runDirty = true;
     render(); // draw this tile's lines now, without waiting for the rest
@@ -694,6 +703,13 @@ function query(q, a) {
 globalThis.onmessage = ({ data: m }) => {
   if (m.type === "tile") loadTile(m);
   else if (m.type === "cancel") inflight.get(m.key)?.abort();
+  else if (m.type === "forget") {
+    // Another zoom level now: its corridor graphs and live data go (stops and lines stay, they're small).
+    for (const k of [...graphs.keys()]) if (+k.split("|")[0] !== m.keep) graphs.delete(k);
+    for (const [k, v] of live) if (v.zq !== m.keep) { live.delete(k); unknown.delete(k); }
+    later.length = 0;
+    recomputeRunning();
+  }
   else if (m.type === "live") {
     // Refresh what's running, for the tiles around the view.
     const [bw, bs, be, bn] = opts.box;

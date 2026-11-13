@@ -147,7 +147,15 @@ export class Network {
 
   /** Ask for the tiles that cover the view (with a margin); drop the ones no longer wanted. */
   update() {
+    // Far out (a country or more in view) nothing is loaded: too much to fetch and draw for a few
+    // long-distance trains. And nothing new is asked for while the map is being moved.
+    if (this.map.getZoom() < 7) { this.queue.length = 0; return this.render(); }
     const zq = this.bucket(), g = Math.max(4, zq - 1);
+    // Zoomed to another level: what was kept for the old one is dropped (here and in the worker).
+    if (this.zq !== zq) {
+      if (this.zq != null) { for (const k of [...this.tiles.keys()]) if (!k.startsWith(zq + "/")) this.tiles.delete(k); this.worker.postMessage({ type: "forget", keep: zq }); }
+      this.zq = zq;
+    }
     const b = this.map.getBounds(), padX = (b.getEast() - b.getWest()) * 0.12, padY = (b.getNorth() - b.getSouth()) * 0.12;
     const [x0, y0] = tileOf(Math.max(-180, b.getWest() - padX), Math.min(85, b.getNorth() + padY), g);
     const [x1, y1] = tileOf(Math.min(179.999, b.getEast() + padX), Math.max(-85, b.getSouth() - padY), g);
@@ -157,6 +165,7 @@ export class Network {
       if (!st || st === "failed" || st === "cancelled") want.push({ key, zq, x, y, g, depth: 0, box: tileBox(x, y, g), d: Math.hypot(x - cx, y - cy) });
     }
     want.sort((a, b) => a.d - b.d);
+    want.length = Math.min(want.length, 12); // the nearest first; the rest when the map stops there
     this.queue = this.queue.filter(q => { if (q.zq === zq) return true; this.tiles.delete(q.key); return false; });
     for (const w of want) { this.tiles.set(w.key, "queued"); this.queue.push(w); }
     this.pump();
@@ -210,6 +219,10 @@ export class Network {
       for (const f of m.features) { const c = f.properties.c; if (!/^#[0-9a-fA-F]{6}$/.test(c)) f.properties.c = "#5F6368"; f.properties.d = isDarkText(f.properties.c) ? 1 : 0; }
       this.map.getSource("vehicles")?.setData({ type: "FeatureCollection", features: m.features });
       for (const fn of this.tickers || []) fn();
+    } else if (m.type === "reset") {
+      // The worker let go of everything (it had grown too big): ask again for what's in view.
+      this.tiles.clear(); this.queue.length = 0; this.pending?.clear(); this.active = 0;
+      this.update();
     } else if (m.type === "error") {
       console.error("Network worker:", m.message);
     } else if (m.type === "answer") {
@@ -217,6 +230,12 @@ export class Network {
     }
   }
   setData(name, buf) {
+    // While the map moves, new data waits for it to stop (swapping it in mid-gesture makes it stutter).
+    if (this.map.isMoving()) {
+      (this.waiting ||= new Map()).set(name, buf);
+      if (!this.waitHooked) { this.waitHooked = true; this.map.once("moveend", () => { this.waitHooked = false; const w = this.waiting; this.waiting = null; for (const [n, b] of w) this.setData(n, b); }); }
+      return;
+    }
     const src = this.map.getSource(name);
     // Not on the map yet (the style is still loading): ask again once it is.
     if (!src) { if (!this.waitingStyle) { this.waitingStyle = true; this.map.once("style.load", () => { this.waitingStyle = false; this.render(true); }); } return; }

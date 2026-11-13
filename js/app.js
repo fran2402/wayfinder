@@ -20,6 +20,7 @@ import { attach as attachIcons } from "./icons.js";
 import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
 import { preloadHikeIcons, HIKE_LAYER_IDS } from "./hiking.js";
 import { vehicleIcon } from "./vehicles.js";
+import { areaAt, streetNear, streetAt, roadKind, kindName, fmtLength, fmtArea, bboxOf, AREA_ZOOM, VIEW_ZOOM } from "./inspect.js";
 import { preloadPlaceIcons, placeIcon1, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
 import { Network } from "./network.js";
@@ -74,7 +75,7 @@ new Runways(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
 
 const EMPTY = { type: "FeatureCollection", features: [] };
-const overlay = { focus: EMPTY, trip: EMPTY };
+const overlay = { focus: EMPTY, trip: EMPTY, outline: EMPTY };
 function setOverlay(name, fc) { overlay[name] = fc; map.getSource(name)?.setData(fc); }
 
 // Ask for the transit lines right away, not once the whole map style has loaded: each area is drawn
@@ -161,6 +162,12 @@ function setSheet(state, animate = true) {
   document.body.style.setProperty("--sheet", wide() ? "0px" : sheetHeight() + "px");
   document.body.dataset.sheet = wide() ? "" : state;
 }
+/** Fit the map to bounds around the panel. Earlier flyTo/easeTo calls leave their padding on the map,
+ *  which fitBounds would add to its own (the panel counted twice, far too zoomed out): cleared first. */
+function fitTo(b, o = {}) {
+  map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+  return map.fitBounds(b, o);
+}
 function padding() {
   if (wide()) return { top: 90, bottom: 60, left: ($("#insp").offsetWidth || 400) + 70, right: 90 };
   return { top: topH() + 10, bottom: sheetHeight() + 24, left: 30, right: 70 };
@@ -188,6 +195,7 @@ const screen = () => stack[stack.length - 1];
 function screenParam(s) {
   if (s.t === "stop") return `stop:${s.ids[0]}~${s.name || ""}`;
   if (s.t === "place") return `place:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${s.name || ""}${s.osm ? `|${s.osm.type}/${s.osm.id}|${s.kind?.key || ""}` : ""}`;
+  if (s.t === "area") return `area:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${[s.what, s.name || "", s.zoom ?? "", s.ele ?? ""].join("|")}`;
   if (s.t === "airport") return `airport:${s.lat.toFixed(5)},${s.lon.toFixed(5)}~${[s.name, s.iata || "", s.icao || "", s.ele ?? ""].join("|")}`;
   if (s.t === "line") return `line:${s.key}${s.tripId ? "~" + s.tripId : ""}`;
   return "";
@@ -226,7 +234,7 @@ addEventListener("popstate", e => {
 
 const TITLES = {
   explore: () => "Explore", settings: () => "Settings", plan: () => "Directions", pick: () => "Lines here", menu: () => "Menu",
-  stop: s => s.name || "Stop", place: s => s.name || "Place", airport: s => s.iata || "Airport", flight: s => "Tracking " + (s.cs || "flight"), itin: s => `${duration(s.it.duration)} route`,
+  stop: s => s.name || "Stop", place: s => s.name || "Place", area: s => s.name || "Area", airport: s => s.iata || "Airport", flight: s => "Tracking " + (s.cs || "flight"), itin: s => `${duration(s.it.duration)} route`,
   line: s => { const l = registry.get(s.key); return l ? `${classLabel(l.cls)} ${l.name}` : "Line"; },
 };
 /** The panel's header: back, the title, and a way home. Nothing on the start screen (the search is its header). */
@@ -266,8 +274,9 @@ async function load(s, key, fn) {
   catch (e) { s[key + "Err"] = e.message || "something went wrong"; }
   finally { s[key + "$"] = false; refresh(s); }
 }
-function mapFor({ focus = null, dim = false, focusFc = EMPTY, tripFc = EMPTY, pin = null } = {}) {
+function mapFor({ focus = null, dim = false, focusFc = EMPTY, tripFc = EMPTY, pin = null, outlineFc = EMPTY } = {}) {
   net.setFocus(focus, dim);
+  setOverlay("outline", outlineFc);
   setOverlay("focus", focusFc);
   setOverlay("trip", tripFc);
   if (pin) pinMarker.setLngLat(pin).addTo(map); else pinMarker.remove();
@@ -275,7 +284,7 @@ function mapFor({ focus = null, dim = false, focusFc = EMPTY, tripFc = EMPTY, pi
 function frame(coords, maxZoom = 16) {
   if (!coords.length) return;
   const b = coords.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-  map.fitBounds(b, { padding: padding(), maxZoom, duration: 650 });
+  fitTo(b, { padding: padding(), maxZoom, duration: 650 });
 }
 
 /* ============================== Shared pieces ============================== */
@@ -664,6 +673,80 @@ VIEWS.place = {
   },
 };
 
+
+
+/* ============================== An area, a street, a peak, a named water ============================== */
+
+const AREA_ICON = { area: "map", street: "path", peak: "terrain", water: "ferry" };
+VIEWS.area = {
+  sheet: "half",
+  enter(s) {
+    mapFor({ pin: s.what === "peak" || s.what === "water" ? [s.lon, s.lat] : null });
+    if (s.what === "area") {
+      map.flyTo({ center: [s.lon, s.lat], zoom: VIEW_ZOOM[s.zoom] ?? 11, padding: padding(), duration: 700 });
+      // The outline whose name matches what was tapped or searched: Nominatim's sizes don't always
+      // line up with the map's (a district can come back as the quarter it's in), so nearby sizes are tried too.
+      load(s, "data", async () => {
+        const norm = x => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        let first = null;
+        for (const zz of [s.zoom, s.zoom - 1, s.zoom - 2, s.zoom + 1].filter(z => z >= 3 && z <= 16)) {
+          const a = await areaAt(s.lon, s.lat, zz).catch(() => null);
+          if (!a) continue;
+          first ||= a;
+          if (!s.name || norm(a.name) === norm(s.name) || norm(a.name).includes(norm(s.name)) || norm(s.name).includes(norm(a.name))) return a;
+        }
+        return first;
+      }).then(() => {
+        const a = s.data;
+        if (screen() !== s || !a) return;
+        if (!s.name) s.name = a.name;
+        setOverlay("outline", { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: a.geojson }] });
+        const b = bboxOf(a.geojson);
+        fitTo([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 15, duration: 700 });
+        refresh(s);
+      });
+    } else if (s.what === "street") {
+      load(s, "data", async () => s.name ? streetNear(s.name, s.lon, s.lat) : null).then(() => {
+        const st = s.data;
+        if (screen() !== s || !st) return;
+        setOverlay("outline", { type: "FeatureCollection", features: st.geojson.coordinates.map(c => ({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: c } })) });
+        const b = bboxOf(st.geojson);
+        fitTo([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16.5, duration: 700 });
+      });
+    } else map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), s.what === "peak" ? 13 : 12), padding: padding(), duration: 650 });
+  },
+  html(s) {
+    const d = s.data, row = (ic, label, value) => `<div class="irow">${icon(ic, "s")}<span><small>${esc(label)}</small><b>${esc(value)}</b></span></div>`;
+    let kind = s.label || "", rows = "";
+    if (s.what === "area") {
+      kind = d ? kindName(d.kind) : kindName(s.kindKey);
+      rows = s.dataErr ? failed(s.dataErr) : s.data === undefined ? loading(3) : !d ? `<div class="card muted">No outline is known for this place.</div>`
+        : `<div class="card list info">${row("map", "Area", fmtArea(d.area))}${row("path", "Border length", fmtLength(d.perimeter))}${d.within ? row("globe", "In", d.within) : ""}
+          ${d.osm ? `<div class="irow">${icon("info", "s")}<span><small>Outline from</small><a href="https://www.openstreetmap.org/${d.osm.type}/${d.osm.id}" target="_blank" rel="noopener"><b>OpenStreetMap</b></a></span></div>` : ""}</div>`;
+    } else if (s.what === "street") {
+      kind = d ? roadKind(d.kind) : "Street";
+      rows = s.dataErr ? failed(s.dataErr) : s.data === undefined ? loading(3) : !d ? `<div class="card muted">This street isn't known by that name nearby.</div>`
+        : `<div class="card list info">${row("path", "Length", fmtLength(d.length))}${row("info", "Made of", `${d.ways} stretch${d.ways === 1 ? "" : "es"} of road`)}</div>
+          <p class="sub">All of the road with this name within 6 km; where it's a dual carriageway both sides count. From OpenStreetMap (via QLever).</p>`;
+    } else if (s.what === "peak") {
+      kind = s.label || "Peak";
+      rows = `<div class="card list info">${s.ele ? row("terrain", "Height", `${Math.round(s.ele).toLocaleString("en")} m · ${Math.round(s.ele * 3.28084).toLocaleString("en")} ft`) : ""}${row("compass", "Position", `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}`)}</div>`;
+    } else {
+      rows = `<div class="card list info">${row("compass", "Position", `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}`)}</div>`;
+    }
+    return `<header class="title withicon"><span class="aicon">${icon(AREA_ICON[s.what] || "pin")}</span><div><h1>${esc(s.name || kind)}</h1><p><b>${esc(kind)}</b></p></div></header>
+      <div class="circs">
+        <button class="circ primary" data-act="dir-place"><span>${icon("dir")}</span>Directions</button>
+        <button class="circ" data-act="share"><span>${icon("share")}</span>Share</button>
+        ${s.what === "area" || s.what === "street" ? `<button class="circ" data-act="fit-outline"><span>${icon("map")}</span>Show all</button>` : ""}</div>
+      ${rows}`;
+  },
+};
+function openArea(f) {
+  const p = f.properties, cls = p.class, [lon, lat] = f.geometry.type === "Point" ? f.geometry.coordinates : [null, null];
+  const name = p["name:en"] || p.name_en || p.name;
+  go({ t: "area", what: "area", name, kindKey: cls, zoom: AREA_ZOOM[cls] ?? 12, lon, lat });
+}
 
 /* ============================== Airport ============================== */
 
@@ -1067,7 +1150,8 @@ VIEWS.settings = {
         ${sw(settings.liveOnly, 'data-set="live"', "Only lines running now", "Lines with nothing on the move in the next half hour are left out")}
         ${sw(settings.spread, 'data-set="spread"', "Lines side by side", "Lines sharing a street or track are drawn next to each other")}</div>`
       + section("Show") + `<div class="sets">${CLASSES.map(c => sw(net.enabled.has(c.id), `data-mode="${c.id}"`, c.label, "", c.icon)).join("")}</div>`
-      + section("Your data") + `<div class="sets"><button class="set" data-act="clear-recent"><span><b>Clear recent searches</b><small>Kept in this browser only</small></span></button></div>`
+      + section("Your data") + `<div class="sets"><button class="set" data-act="clear-recent"><span><b>Clear recent searches</b><small>Kept in this browser only</small></span></button>
+        <button class="set" data-act="clear-cache"><span><b>Clear stored map data</b><small>Transit lines and sea marks kept to load faster; they're fetched again</small></span></button></div>`
       + section("About") + `<p class="about">Timetables, live times and routing from <a href="https://transitous.org" target="_blank" rel="noopener">Transitous</a>. Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, tiles by <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>, drawn with <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a>. Keys: <kbd>/</kbd> search, <kbd>Esc</kbd> back.</p>`;
   },
 };
@@ -1134,6 +1218,7 @@ function choose(r) {
   closeOmni(); qEl.value = "";
   if (target) { T[target] = place; if (screen().t === "plan") { screen().planKey = null; refresh(screen()); } else go({ t: "plan" }); return; }
   if (r.type === "STOP" && r.id) go({ t: "stop", ids: [r.id], name: r.name, lon: r.lon, lat: r.lat });
+  else if (r.type === "PLACE" && AREA_ZOOM[r.category] != null) go({ t: "area", what: "area", name: r.name, kindKey: r.category, zoom: AREA_ZOOM[r.category], lon: r.lon, lat: r.lat });
   else go({ t: "place", ...place });
 }
 qEl.addEventListener("focus", () => { if (omni.hidden) showOmni(); });
@@ -1172,7 +1257,7 @@ document.addEventListener("click", async e => {
   if (d.soon) return toast(`${d.soon}: coming soon.`);
   if (d.ltab) { s.ltab = d.ltab; return refresh(s); }
   if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
-  if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); $("#live").hidden = true; if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
   if (d.layer === "hiking") { settings.hiking = !settings.hiking; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "flights") { settings.flights = !settings.flights; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "ski") { settings.ski = !settings.ski; saveSettings(); applyLayers(); return renderLayers(); }
@@ -1203,6 +1288,8 @@ document.addEventListener("click", async e => {
       return;
     }
     case "dir-stop": T.to = { name: s.name, sub: "Stop", lon: s.lon, lat: s.lat }; T.mode = "transit"; return go({ t: "plan" });
+    case "clear-cache": clearCaches(true).then(() => toast("Stored map data cleared.")); return;
+    case "fit-outline": { const fc = overlay.outline; if (fc.features.length) { const b = bboxOf({ coordinates: fc.features.map(f => f.geometry.coordinates) }); fitTo([[b[0], b[1]], [b[2], b[3]]], { padding: padding(), maxZoom: 16, duration: 600 }); } return; }
     case "planes-here": settings.flights = true; saveSettings(); applyLayers(); map.flyTo({ center: [s.lon, s.lat], zoom: 9, padding: padding(), duration: 800 }); return toast("Showing aircraft around the airport. Tap one to track it.");
     case "track-flight": return go({ t: "flight", cs: el.dataset.cs });
     case "follow": planes.setFollow(!planes.tracked?.follow); return;
@@ -1292,9 +1379,29 @@ map.on("click", e => {
   if (pl) return openPlace(pl);
   const sm = map.queryRenderedFeatures(tapBox(e.point, 10), { layers: SEA_CLICK_LAYERS.filter(id => map.getLayer(id)) })[0];
   if (sm) return openSeaMark(sm);
+  // Names on the map: peaks, waters, countries, regions, towns, neighbourhoods; then streets.
+  const has = ids => ids.filter(id => map.getLayer(id));
+  const pk = map.queryRenderedFeatures(tapBox(e.point, 12), { layers: has(["peaks"]) })[0];
+  if (pk) { const p = pk.properties; return go({ t: "area", what: "peak", name: p["name:en"] || p.name, label: p.class === "volcano" ? "Volcano" : "Peak", ele: p.ele ?? null, lon: pk.geometry.coordinates[0], lat: pk.geometry.coordinates[1] }); }
+  const pl2 = map.queryRenderedFeatures(tapBox(e.point, 12), { layers: has(["place-country", "place-state", "place-city", "place-town", "place-village", "place-small"]) })[0];
+  if (pl2) return openArea(pl2);
+  const wn = map.queryRenderedFeatures(tapBox(e.point, 10), { layers: has(["sea-names", "water-names", "water-names-line"]) })[0];
+  if (wn) { const p = wn.properties; return go({ t: "area", what: "water", name: p["name:en"] || p.name, label: kindName(p.class === "lake" ? "lake" : p.class === "ocean" ? "ocean" : p.class === "sea" ? "sea" : p.class === "bay" ? "bay" : p.class === "strait" ? "strait" : "water"), lon: e.lngLat.lng, lat: e.lngLat.lat }); }
+  const rn0 = map.getZoom() >= 13 && map.queryRenderedFeatures(tapBox(e.point, 8), { layers: has(["road-names", "road-names-minor", "path-names"]) })[0];
+  const nm0 = rn0 && (rn0.properties["name:en"] || rn0.properties.name);
+  if (nm0) return go({ t: "area", what: "street", name: nm0, lon: e.lngLat.lng, lat: e.lngLat.lat });
   const keys = [...new Set(map.queryRenderedFeatures(tapBox(e.point, 11), { layers: ["net-lines"] }).flatMap(f => net.keysOf(f.properties.lines)))];
   if (keys.length === 1) return go({ t: "line", key: keys[0] });
   if (keys.length > 1) return go({ t: "pick", keys });
+  if (map.getZoom() >= 13) {
+    const rn = map.queryRenderedFeatures(tapBox(e.point, 8), { layers: has(["road-names", "road-names-minor", "path-names"]) })[0];
+    const nm = rn && (rn.properties["name:en"] || rn.properties.name);
+    if (nm) return go({ t: "area", what: "street", name: nm, lon: e.lngLat.lng, lat: e.lngLat.lat });
+    if (map.queryRenderedFeatures(tapBox(e.point, 4), { layers: has(["road", "road-bridge", "road-tunnel", "path-trail", "path-footway"]) }).length) {
+      const s0 = { t: "area", what: "street", name: null, lon: e.lngLat.lng, lat: e.lngLat.lat };
+      return streetAt(s0.lon, s0.lat).then(n => { if (n) go({ ...s0, name: n }); else toast("This road has no name."); });
+    }
+  }
   // Anywhere on an airfield (runways, aprons): that airport.
   if (map.getZoom() >= 11 && map.queryRenderedFeatures(tapBox(e.point, 2), { layers: ["aeroway", "aeroway-runway", "aeroway-taxiway"].filter(id => map.getLayer(id)) }).length) {
     const here = [e.lngLat.lng, e.lngLat.lat];
@@ -1325,16 +1432,12 @@ map.on("mousemove", e => {
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
     if (!map.getLayer("stations")) return;
-    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "planes", "poi-major", "poi-minor", ...SEA_CLICK_LAYERS, ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
+    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "planes", "poi-major", "poi-minor", "peaks", "place-country", "place-state", "place-city", "place-town", "place-village", "place-small", "sea-names", "water-names", "road-names", "road-names-minor", ...SEA_CLICK_LAYERS, ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
   });
 });
 
 // The status line: how many vehicles move in view, and when they last moved.
-net.onTick(() => {
-  const n = net.vehicleCount || 0;
-  $("#vcount").textContent = n;
-  $("#live").hidden = !n || !settings.vehicles || !settings.transit;
-});
+
 
 // Start: read a link to a stop, a place or a line before drawing.
 const deepLink = location.hash.slice(1).split("&").find(p => p.startsWith("s="));
@@ -1345,6 +1448,7 @@ if (deepLink) {
   const v = decodeURIComponent(deepLink.slice(2)), kind = v.slice(0, v.indexOf(":")), [id, name] = v.slice(v.indexOf(":") + 1).split("~");
   if (kind === "stop") go({ t: "stop", ids: [id], name: name || null, lon: null, lat: null });
   else if (kind === "airport") { const [lat, lon] = id.split(",").map(Number), [n, iata, icao, ele] = (name || "").split("|"); go({ t: "airport", name: n || "Airport", iata: iata || null, icao: icao || null, ele: ele === "" || ele == null ? null : +ele, lon, lat }); }
+  else if (kind === "area") { const [lat, lon] = id.split(",").map(Number), [what, n, zz, ele] = (name || "").split("|"); go({ t: "area", what, name: n, zoom: zz ? +zz : null, ele: ele ? +ele : null, lon, lat }); }
   else if (kind === "place") {
     const [lat, lon] = id.split(",").map(Number), [n, el, key] = (name || "").split("|"), [type, oid] = (el || "").split("/");
     const k = key ? kindOf({ class: key.split("/")[0], subclass: key.split("/")[1] }) : null;
@@ -1355,6 +1459,21 @@ if (deepLink) {
     if (!tryOpen()) { const t = setInterval(() => { if (tryOpen()) clearInterval(t); }, 800); setTimeout(() => clearInterval(t), 30000); }
   }
 }
+
+// Stored data: old caches from earlier versions go at once; transit lines older than a day go at start.
+// "Clear stored map data" in Settings empties them all (the app itself stays, for offline use).
+async function clearCaches(all = false) {
+  if (!("caches" in window)) return;
+  for (const k of await caches.keys()) {
+    if (k.startsWith("wayfinder-v")) continue; // the app itself (the service worker keeps it current)
+    if (all || k !== "wayfinder-routes-v1") { await caches.delete(k); continue; }
+    const c = await caches.open(k);
+    for (const req of await c.keys()) { const r = await c.match(req); if (!r || Date.now() - +r.headers.get("x-at") > 864e5) await c.delete(req); }
+  }
+  if (all) net.worker.postMessage({ type: "forget", keep: -1 });
+  if (all) { net.tiles.clear(); net.zq = null; net.update(); }
+}
+setTimeout(() => clearCaches().catch(() => {}), 8000);
 
 // Works offline and installs like an app.
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
