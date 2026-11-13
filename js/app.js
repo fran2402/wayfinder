@@ -20,6 +20,7 @@ import { attach as attachIcons } from "./icons.js";
 import { Planes, preloadPlaneIcons, fmt } from "./flights.js";
 import { preloadHikeIcons, HIKE_LAYER_IDS } from "./hiking.js";
 import { vehicleIcon } from "./vehicles.js";
+import { Ships, shipIcon, SHIP_KINDS, kindOf as shipKind, statusText } from "./ships.js";
 import { areaAt, streetNear, streetAt, roadKind, kindName, fmtLength, fmtArea, bboxOf, AREA_ZOOM, VIEW_ZOOM } from "./inspect.js";
 import { preloadPlaceIcons, placeIcon1, placeSvg, kindOf, osmOf, osmTags, hoursLines, detailRows } from "./places.js";
 import "./tiles.js"; // smoothed vector tiles and sea depth (before the map asks for them)
@@ -30,7 +31,7 @@ import { $, esc, icon, clock, minutesUntil, duration, distance, metres, debounce
 
 /* ============================== Settings ============================== */
 
-const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, flights: true, hiking: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
+const settings = Object.assign({ theme: "system", spread: true, liveOnly: true, vehicles: true, transit: true, places: true, sea: true, ski: true, flights: true, hiking: true, boats: true, modes: CLASSES.map(c => c.id) }, store.get("settings", {}));
 const saveSettings = () => store.set("settings", settings);
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const themeNow = () => settings.theme === "system" ? (darkQuery.matches ? "dark" : "light") : settings.theme;
@@ -57,6 +58,7 @@ map.on("styleimagemissing", e => {
   if (e.id.startsWith("stop-")) return stopIcon(map, e.id, THEMES[themeNow()]);
   if (e.id.startsWith("sm-")) return seaIcon(e.id);
   if (vehicleIcon(e.id)) return;
+  if (shipIcon(e.id)) return;
   if (e.id.startsWith("pl-")) return placeIcon1(e.id);
   if (/^(rwy-|air-|shield-|road-|ski-|pl-|hike-|plane)/.test(e.id) || e.id === "peak" || e.id === "volcano") return; // drawn as SVG (icons.js), on their way
   // A place kind the base map's sprite has no icon for: a small dot instead.
@@ -70,6 +72,7 @@ preloadSeaIcons(); preloadAirIcons(); preloadStreetIcons(); preloadSkiIcons(); p
 const net = new Network(map);
 const sea = new SeaArcs(map);
 const planes = new Planes(map);
+const ships = new Ships(map);
 planes.onChange(() => { const s = screen(); if (s.t === "flight") refresh(s); });
 new Runways(map);
 Object.assign(net, { spread: settings.spread, liveOnly: settings.liveOnly, vehicles: settings.vehicles, enabled: new Set(settings.modes) });
@@ -234,7 +237,7 @@ addEventListener("popstate", e => {
 
 const TITLES = {
   explore: () => "Explore", settings: () => "Settings", plan: () => "Directions", pick: () => "Lines here", menu: () => "Menu",
-  stop: s => s.name || "Stop", place: s => s.name || "Place", area: s => s.name || "Area", airport: s => s.iata || "Airport", flight: s => "Tracking " + (s.cs || "flight"), itin: s => `${duration(s.it.duration)} route`,
+  stop: s => s.name || "Stop", place: s => s.name || "Place", ship: s => ships.get(s.mmsi)?.name || "Boat", area: s => s.name || "Area", airport: s => s.iata || "Airport", flight: s => "Tracking " + (s.cs || "flight"), itin: s => `${duration(s.it.duration)} route`,
   line: s => { const l = registry.get(s.key); return l ? `${classLabel(l.cls)} ${l.name}` : "Line"; },
 };
 /** The panel's header: back, the title, and a way home. Nothing on the start screen (the search is its header). */
@@ -748,6 +751,37 @@ function openArea(f) {
   go({ t: "area", what: "area", name, kindKey: cls, zoom: AREA_ZOOM[cls] ?? 12, lon, lat });
 }
 
+
+/* ============================== A boat ============================== */
+
+VIEWS.ship = {
+  sheet: "half",
+  enter(s) {
+    const x = ships.get(s.mmsi);
+    mapFor({});
+    if (x) map.easeTo({ center: [x.lon, x.lat], zoom: Math.max(map.getZoom(), 12), padding: padding(), duration: 600 });
+    clearInterval(s.timer); s.timer = setInterval(() => { if (screen() !== s) return clearInterval(s.timer); refresh(s); }, 10000);
+  },
+  html(s) {
+    const x = ships.get(s.mmsi);
+    if (!x) return `<div class="card muted">This boat isn't reporting its position any more.</div>`;
+    const k = shipKind(x.type), [colour, kind] = SHIP_KINDS[k];
+    const row = (ic, label, v) => v == null || v === "" ? "" : `<div class="irow">${icon(ic, "s")}<span><small>${esc(label)}</small><b>${esc(v)}</b></span></div>`;
+    const ago = x.at ? Math.max(0, Math.round((Date.now() - x.at) / 60000)) : null;
+    const course = x.cog != null && x.cog < 360 ? `${String(Math.round(x.cog)).padStart(3, "0")}° ${["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(x.cog / 45) % 8]}` : null;
+    return `<header class="title withicon"><span class="aicon" style="background:${colour}22">${icon("ferry")}</span><div><h1>${esc(x.name || "Unnamed vessel")}</h1>
+        <p><b style="color:${colour}">${esc(kind)}</b>${statusText(x.status) ? " · " + esc(statusText(x.status)) : ""}</p></div></header>
+      <div class="card list info">
+        ${row("wind", "Speed", x.sog != null ? `${x.sog.toFixed(1)} kn · ${Math.round(x.sog * 1.852)} km/h` : null)}
+        ${row("compass", "Course", course)}
+        ${row("pin", "Destination", x.dest)}
+        ${row("info", "Size", x.length ? `${x.length} × ${x.width || "?"} m${x.draught ? ` · draught ${x.draught} m` : ""}` : null)}
+        ${row("ticket", "Identity", [x.mmsi && `MMSI ${x.mmsi}`, x.imo && `IMO ${x.imo}`, x.callsign && `call sign ${x.callsign}`].filter(Boolean).join(" · "))}
+        ${row("clock", "Position", ago == null ? null : ago < 1 ? "Just now" : `${ago} min ago`)}</div>
+      <p class="sub">Live AIS positions from ${esc(x.src || "AIS")}.</p>`;
+  },
+};
+
 /* ============================== Airport ============================== */
 
 const BOARD_FLAP = str => `<span class="flaps">${[...String(str)].map(c => `<i>${c === " " ? "&nbsp;" : esc(c)}</i>`).join("")}</span>`;
@@ -966,6 +1000,8 @@ function applyLayers() {
   for (const id of NET_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.transit));
   for (const id of ["poi-major", "poi-minor"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.places));
   for (const id of SEA_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.sea));
+  if (map.getLayer("ships")) map.setLayoutProperty("ships", "visibility", vis(settings.boats));
+  ships.on = settings.boats; if (settings.boats) ships.update(); else ships.render();
   for (const id of HIKE_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.hiking));
   for (const id of SKI_LAYER_IDS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.ski));
   for (const id of ["planes", "plane-trail"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(settings.flights || !!planes.tracked));
@@ -989,6 +1025,7 @@ function renderLayers() {
     ${sw(settings.sea, 'data-layer="sea"', "Sea", "Sea marks, ferries, marinas, lighthouses, Blue Flags", "ferry")}
     ${sw(settings.ski, 'data-layer="ski"', "Skiing", "Ski resorts, runs by difficulty, lifts, trails", "terrain")}
     ${sw(settings.hiking, 'data-layer="hiking"', "Hiking", "Marked walking and hiking routes, trails, peaks", "walk")}
+    ${sw(settings.boats, 'data-layer="boats"', "Boats", "Ships at sea now (AIS), by kind; tap one for details", "ferry")}
     ${sw(settings.flights, 'data-layer="flights"', "Flights", "Aircraft in the air now; tap one to track it", "plane")}
     ${soonRow("bike-route", "Bike routes", "Cycle networks and lanes")}
     ${soonRow("traffic", "Traffic", "Road speeds and closures")}
@@ -1258,6 +1295,7 @@ document.addEventListener("click", async e => {
   if (d.ltab) { s.ltab = d.ltab; return refresh(s); }
   if (d.ptab) { s.tab = d.ptab; if (s.t === "airport" && FLIGHTS_RELAY && d.ptab !== "overview" && !s.sched?.[d.ptab]) loadSchedule(s); refresh(s); if (s.t === "airport") requestAnimationFrame(() => body.querySelector(".fids [data-next]")?.scrollIntoView({ block: "center" })); return; }
   if (d.layer === "transit") { settings.transit = !settings.transit; saveSettings(); applyLayers(); renderLayers(); if (s.t === "explore") { if (settings.transit) loadHere(s, true); refresh(s); } return; }
+  if (d.layer === "boats") { settings.boats = !settings.boats; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "hiking") { settings.hiking = !settings.hiking; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "flights") { settings.flights = !settings.flights; saveSettings(); applyLayers(); return renderLayers(); }
   if (d.layer === "ski") { settings.ski = !settings.ski; saveSettings(); applyLayers(); return renderLayers(); }
@@ -1367,6 +1405,8 @@ net.on(debounce(() => {
 const tapBox = (p, r = 8) => [[p.x - r, p.y - r], [p.x + r, p.y + r]];
 map.on("click", e => {
   closeOmni();
+  const ship = map.getLayer("ships") && map.queryRenderedFeatures(tapBox(e.point, 12), { layers: ["ships"] })[0];
+  if (ship) return go({ t: "ship", mmsi: ship.properties.m });
   const plane = map.getLayer("planes") && map.queryRenderedFeatures(tapBox(e.point, 12), { layers: ["planes"] })[0];
   if (plane) return go({ t: "flight", hex: plane.properties.hex, cs: plane.properties.flight });
   const veh = map.getLayer("vehicles") && map.queryRenderedFeatures(tapBox(e.point, 10), { layers: ["vehicles"] })[0];
@@ -1432,7 +1472,7 @@ map.on("mousemove", e => {
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
     if (!map.getLayer("stations")) return;
-    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "planes", "poi-major", "poi-minor", "peaks", "place-country", "place-state", "place-city", "place-town", "place-village", "place-small", "sea-names", "water-names", "road-names", "road-names-minor", ...SEA_CLICK_LAYERS, ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
+    map.getCanvas().style.cursor = map.queryRenderedFeatures(tapBox(e.point), { layers: ["stations", "net-lines", "vehicles", "planes", "ships", "poi-major", "poi-minor", "peaks", "place-country", "place-state", "place-city", "place-town", "place-village", "place-small", "sea-names", "water-names", "road-names", "road-names-minor", ...SEA_CLICK_LAYERS, ...AIR_CLICK_LAYERS].filter(id => map.getLayer(id)) }).length ? "pointer" : "";
   });
 });
 

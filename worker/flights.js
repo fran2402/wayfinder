@@ -5,6 +5,7 @@
 //   GET /near?lat=41.30&lon=2.08&dist=40               → aircraft near a point (for planes on the map)
 //   GET /schedule?iata=BCN&dir=departures              → today's whole board: times, gates, terminals, status
 //   GET /track?hex=34324e  or  /track?cs=IBE0689        → one aircraft, live, with its route (for tracking)
+//   GET /ships?w=13&s=44&e=14&n=45                       → boats in an area (AIS via aisstream.io; secret AISSTREAM_KEY)
 // Data: aircraft positions from adsb.lol (free, ODbL), routes from adsbdb.com (free), no keys needed.
 // The day's schedule comes from AeroDataBox and needs a key: in the Worker's Settings → Variables and Secrets,
 // add a secret AERODATABOX_KEY (your RapidAPI key). Without it /schedule answers 501 and the site shows live flights only.
@@ -35,6 +36,12 @@ export default {
         const r = a.flight ? await route(a.flight.trim(), ctx).catch(() => null) : null;
         const place = ap => ap && { iata: ap.iata_code, icao: ap.icao_code, city: ap.municipality, name: ap.name, lat: ap.latitude, lon: ap.longitude };
         return send({ at: Date.now(), aircraft: slim(a), route: r && { flight: r.callsign_iata || r.callsign, airline: r.airline?.name || null, from: place(r.origin), to: place(r.destination) } }, 200, 4);
+      }
+      if (url.pathname === "/ships") {
+        if (!env.AISSTREAM_KEY) return send({ error: "no AIS key" }, 501, 300);
+        const box = ["w", "s", "e", "n"].map(k => num(k, -180, 180));
+        if (box[2] - box[0] > 6 || box[3] - box[1] > 4) return send({ ships: [], note: "zoom in" }, 200, 30);
+        return send(await ships(box, env, ctx), 200, 20);
       }
       if (url.pathname === "/schedule") {
         if (!env.AERODATABOX_KEY) return send({ error: "no schedule key" }, 501, 300);
@@ -159,4 +166,67 @@ async function schedule(kind, code, dir, env, ctx) {
     };
   }).filter(f => f.time).sort((a, b) => a.sort.localeCompare(b.sort));
   return { at: Date.now(), date: today, tz, airport: { code, name: info?.shortName || info?.fullName || null, country: info?.country?.code || null }, dir, flights };
+}
+
+/* ============================== Boats (aisstream.io) ============================== */
+
+// AIS from aisstream.io (free; the key is the Worker secret AISSTREAM_KEY). Each request listens for a
+// few seconds to the area (in 1° cells), and what was heard is kept per cell for 15 minutes — ships at
+// anchor or moored only report every few minutes, so they add up over successive requests.
+async function ships([w, s, e, n], env, ctx) {
+  const cells = [];
+  for (let x = Math.floor(w); x <= Math.floor(e); x++) for (let y = Math.floor(s); y <= Math.floor(n); y++) cells.push([x, y]);
+  const cache = caches.default, key = ([x, y]) => new Request(`https://ais.cache/${x}/${y}`);
+  const known = new Map();
+  let fresh = true;
+  for (const c of cells) {
+    const hit = await cache.match(key(c));
+    if (!hit) { fresh = false; continue; }
+    const d = await hit.json();
+    if (Date.now() - d.at > 40000) fresh = false;
+    for (const x of d.ships) if (Date.now() - x.at < 15 * 60000) known.set(x.mmsi, x);
+  }
+  if (!fresh) {
+    for (const x of await listen([w, s, e, n], env.AISSTREAM_KEY, 7000)) known.set(x.mmsi, { ...known.get(x.mmsi), ...x });
+    // Keep what's known per cell.
+    for (const c of cells) {
+      const mine = [...known.values()].filter(x => Math.floor(x.lon) === c[0] && Math.floor(x.lat) === c[1]);
+      ctx.waitUntil(cache.put(key(c), new Response(JSON.stringify({ at: Date.now(), ships: mine }), { headers: { "cache-control": "public, max-age=900" } })));
+    }
+  }
+  return { at: Date.now(), ships: [...known.values()].filter(x => x.lon >= w && x.lon <= e && x.lat >= s && x.lat <= n) };
+}
+
+/** Listen to aisstream.io for `ms` milliseconds; the ships heard, latest report each. */
+async function listen([w, s, e, n], key, ms) {
+  const res = await fetch("https://stream.aisstream.io/v0/stream", { headers: { Upgrade: "websocket" } });
+  const ws = res.webSocket;
+  if (!ws) throw new Error("aisstream: no connection");
+  ws.accept();
+  ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: [[[s, w], [n, e]]],
+    FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport", "ShipStaticData", "StaticDataReport"] }));
+  const out = new Map();
+  await new Promise(resolve => {
+    const done = () => { try { ws.close(); } catch {} resolve(); };
+    setTimeout(done, ms);
+    ws.addEventListener("close", resolve);
+    ws.addEventListener("error", resolve);
+    ws.addEventListener("message", ev => {
+      let m; try { m = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); } catch { return; }
+      const md = m.MetaData || {}, mmsi = md.MMSI;
+      if (!mmsi) return;
+      const x = out.get(mmsi) || { mmsi };
+      x.name = (md.ShipName || x.name || "").trim() || x.name; x.lat = md.latitude ?? x.lat; x.lon = md.longitude ?? x.lon; x.at = Date.now();
+      const msg = m.Message || {};
+      const pr = msg.PositionReport || msg.StandardClassBPositionReport || msg.ExtendedClassBPositionReport;
+      if (pr) { x.sog = pr.Sog; x.cog = pr.Cog; x.heading = pr.TrueHeading === 511 ? null : pr.TrueHeading; if (pr.NavigationalStatus != null) x.status = pr.NavigationalStatus; if (pr.Type) x.type ??= pr.Type; }
+      const sd = msg.ShipStaticData;
+      if (sd) { x.type = sd.Type; x.dest = (sd.Destination || "").trim() || null; x.callsign = (sd.CallSign || "").trim() || null; x.imo = sd.ImoNumber || null;
+        x.draught = sd.MaximumStaticDraught || null; const d = sd.Dimension; if (d) { x.length = d.A + d.B; x.width = d.C + d.D; } }
+      const st = msg.StaticDataReport;
+      if (st?.ReportB) { x.type = st.ReportB.ShipType ?? x.type; x.callsign = (st.ReportB.CallSign || "").trim() || x.callsign; }
+      out.set(mmsi, x);
+    });
+  });
+  return [...out.values()].filter(x => x.lat != null);
 }

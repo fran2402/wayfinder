@@ -9,6 +9,7 @@ import { skiSources, skiLayers } from "./ski.js";
 import { placeIcon, placeTextColour, HIDDEN } from "./places.js";
 import { planeSources, planeLayers } from "./flights.js";
 import { hikeLayers } from "./hiking.js";
+import { shipSources, shipLayers } from "./ships.js";
 export { stopIcon } from "./network.js";
 
 /* The map palette:
@@ -80,6 +81,7 @@ export function buildStyle(theme) {
       ...skiSources(),
       outline: { type: "geojson", data: { type: "FeatureCollection", features: [] } },
       ...planeSources(),
+      ...shipSources(),
       omt: { type: "vector", url: "wfomt://planet", attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' },
       ...networkSources(),
     },
@@ -253,6 +255,7 @@ export function buildStyle(theme) {
       ...hike.labels,
       ...sea.over,
       ...net.labels,
+      ...shipLayers(t),
       ...planeLayers(t),
     ],
   };

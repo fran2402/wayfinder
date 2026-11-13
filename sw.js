@@ -1,7 +1,7 @@
 // Offline: the app itself (page, styles, scripts, map library) is kept in a cache and used when the
 // network isn't there; online, the newest version always comes from the network. Map tiles, fonts and transit data always come from the network.
-const CACHE = "wayfinder-v24";
-const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/api.js", "js/basemap.js", "js/diagram.js", "js/lines.js", "js/network.js", "js/net-worker.js", "js/tile-worker.js", "js/tiles.js", "js/maritime.js", "js/aviation.js", "js/streets.js", "js/icons.js", "js/fids.js", "js/ski.js", "js/seamarks-core.js", "js/places.js", "js/placeicons.js", "js/flights.js", "js/hiking.js", "js/vehicles.js", "js/inspect.js", "js/util.js",
+const CACHE = "wayfinder-v25";
+const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/api.js", "js/basemap.js", "js/diagram.js", "js/lines.js", "js/network.js", "js/net-worker.js", "js/tile-worker.js", "js/tiles.js", "js/maritime.js", "js/aviation.js", "js/streets.js", "js/icons.js", "js/fids.js", "js/ski.js", "js/seamarks-core.js", "js/places.js", "js/placeicons.js", "js/flights.js", "js/hiking.js", "js/vehicles.js", "js/inspect.js", "js/ships.js", "js/util.js",
   "vendor/maplibre-gl/maplibre-gl.js", "vendor/maplibre-gl/maplibre-gl.css", "vendor/pmtiles/pmtiles.js", "icon.svg", "manifest.webmanifest"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
